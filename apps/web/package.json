@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@gaming-pool/shared": "*",
+    "better-auth": "^1.1.13",
     "next": "^15.1.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

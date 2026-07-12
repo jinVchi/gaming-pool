@@ -151,3 +151,112 @@ p {
   max-width: 100%;
   height: auto;
 }
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 20px 24px 0;
+}
+
+.site-logo {
+  color: var(--text);
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+
+.site-logo:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.auth-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+}
+
+.auth-username {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.auth-link-button {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 0;
+}
+
+.auth-link-button:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.auth-signup-button {
+  padding: 8px 18px;
+  font-size: 0.9rem;
+}
+
+.auth-popover {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  width: 260px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+}
+
+.auth-popover form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-popover input {
+  appearance: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.9rem;
+  padding: 9px 12px;
+}
+
+.auth-popover input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.auth-popover .play-button {
+  padding: 9px 16px;
+  font-size: 0.9rem;
+}
+
+.auth-popover .play-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.auth-error {
+  color: #ff6b6b;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.auth-switch {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
