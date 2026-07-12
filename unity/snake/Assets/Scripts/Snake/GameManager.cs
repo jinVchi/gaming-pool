@@ -107,7 +107,7 @@ namespace GamingPool.Snake
                     break;
                 case "state":
                     var state = payload.ToObject<StatePayload>();
-                    snakeRenderer.Render(state.Snakes, _localPlayerId);
+                    snakeRenderer.Render(state.Snakes);
                     foodRenderer.Render(state.Food);
                     UpdateScore(state);
                     break;

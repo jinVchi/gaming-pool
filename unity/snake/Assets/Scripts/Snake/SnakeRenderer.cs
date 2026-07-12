@@ -7,12 +7,11 @@ namespace GamingPool.Snake
     {
         [SerializeField] private GameObject segmentPrefab;
         [SerializeField] private float cellSize = 1f;
-        [SerializeField] private Color localColor = Color.green;
-        [SerializeField] private Color otherColor = Color.cyan;
+        [SerializeField] private Color fallbackColor = Color.white;
 
         private readonly Dictionary<string, List<GameObject>> _pools = new Dictionary<string, List<GameObject>>();
 
-        public void Render(List<SnakeView> snakes, string localPlayerId)
+        public void Render(List<SnakeView> snakes)
         {
             var seen = new HashSet<string>();
 
@@ -27,7 +26,10 @@ namespace GamingPool.Snake
                     _pools[snake.Id] = pool;
                 }
 
-                var color = snake.Id == localPlayerId ? localColor : otherColor;
+                if (!ColorUtility.TryParseHtmlString(snake.Color, out var color))
+                {
+                    color = fallbackColor;
+                }
 
                 for (var i = 0; i < snake.Segments.Count; i++)
                 {

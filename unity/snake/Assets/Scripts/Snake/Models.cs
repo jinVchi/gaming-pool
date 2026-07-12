@@ -15,6 +15,7 @@ namespace GamingPool.Snake
     {
         [JsonProperty("id")] public string Id;
         [JsonProperty("displayName")] public string DisplayName;
+        [JsonProperty("color")] public string Color;
         [JsonProperty("segments")] public List<Cell> Segments;
         [JsonProperty("alive")] public bool Alive;
         [JsonProperty("score")] public int Score;

@@ -86,6 +86,7 @@ async function createRoom(roomId: string): Promise<RoomInstance | null> {
   };
 
   rooms.set(roomId, room);
+  console.log(`[room ${roomId}] created (game=${room.slug}, policy=${room.isAuto ? "auto" : "created"}, maxPlayers=${room.maxPlayers})`);
   return room;
 }
 
@@ -102,6 +103,8 @@ export function addPlayer(room: RoomInstance, player: Player, socket: WebSocket)
   if (room.isAuto) {
     void redis.zincrby(roomsKey(room.slug), 1, room.roomId);
   }
+
+  console.log(`[room ${room.roomId}] ${player.displayName} (${player.id}) joined (${room.players.size}/${room.maxPlayers})`);
 }
 
 export function handleMessage(room: RoomInstance, playerId: string, raw: string): void {
@@ -131,15 +134,17 @@ export function removePlayer(room: RoomInstance, playerId: string): void {
     void redis.zincrby(roomsKey(room.slug), -1, room.roomId);
   }
 
+  console.log(`[room ${room.roomId}] ${playerId} left (${room.players.size}/${room.maxPlayers})`);
+
   if (room.players.size === 0) {
     room.emptySince = Date.now();
     if (!room.isAuto) {
-      void destroyRoom(room);
+      void destroyRoom(room, "empty, created-policy");
     }
   }
 }
 
-async function destroyRoom(room: RoomInstance): Promise<void> {
+async function destroyRoom(room: RoomInstance, reason: string): Promise<void> {
   clearInterval(room.tickHandle);
   rooms.delete(room.roomId);
 
@@ -148,6 +153,8 @@ async function destroyRoom(room: RoomInstance): Promise<void> {
   if (room.isAuto) pipeline.zrem(roomsKey(room.slug), room.roomId);
   if (room.joinCode) pipeline.del(roomCodeKey(room.joinCode));
   await pipeline.exec();
+
+  console.log(`[room ${room.roomId}] closed (${reason})`);
 }
 
 // Rolling `auto` rooms are destroyed after sitting empty past the TTL; `created`
@@ -156,7 +163,7 @@ setInterval(() => {
   const now = Date.now();
   for (const room of rooms.values()) {
     if (room.isAuto && room.emptySince && now - room.emptySince > EMPTY_ROOM_TTL_MS) {
-      void destroyRoom(room);
+      void destroyRoom(room, "empty auto-policy room past TTL");
     }
   }
 }, EMPTY_ROOM_SWEEP_MS);

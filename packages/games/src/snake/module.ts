@@ -32,6 +32,7 @@ function serializeState(sim: SnakeSimState) {
       snakes: [...sim.snakes.values()].map((snake) => ({
         id: snake.playerId,
         displayName: snake.displayName,
+        color: snake.color,
         segments: snake.segments,
         alive: snake.alive,
         score: snake.score,

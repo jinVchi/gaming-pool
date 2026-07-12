@@ -3,6 +3,22 @@ export const STEP_MS = 150;
 export const FOOD_COUNT = 30;
 export const START_LENGTH = 3;
 
+// Assigned to joining snakes in order, cycling if a room ever exceeds this
+// many concurrent joins. Index advances monotonically per room — a snake that
+// leaves and rejoins gets the next color in line, not its old one back.
+export const SNAKE_COLORS: readonly string[] = [
+  "#22c55e", // green
+  "#3b82f6", // blue
+  "#ef4444", // red
+  "#eab308", // yellow
+  "#a855f7", // purple
+  "#f97316", // orange
+  "#06b6d4", // cyan
+  "#ec4899", // pink
+  "#84cc16", // lime
+  "#6366f1", // indigo
+];
+
 export type Direction = "up" | "down" | "left" | "right";
 
 const DIRECTION_OFFSETS: Record<Direction, { x: number; y: number }> = {
@@ -27,6 +43,7 @@ export interface Cell {
 export interface Snake {
   playerId: string;
   displayName: string;
+  color: string;
   segments: Cell[];
   direction: Direction;
   pendingDirection: Direction;
@@ -38,6 +55,7 @@ export interface SnakeSimState {
   snakes: Map<string, Snake>;
   food: Cell[];
   accumulatedMs: number;
+  nextColorIndex: number;
 }
 
 function cellKey(cell: Cell): string {
@@ -68,7 +86,7 @@ function randomEmptyCell(state: SnakeSimState): Cell {
 }
 
 export function createSimState(): SnakeSimState {
-  const state: SnakeSimState = { snakes: new Map(), food: [], accumulatedMs: 0 };
+  const state: SnakeSimState = { snakes: new Map(), food: [], accumulatedMs: 0, nextColorIndex: 0 };
   for (let i = 0; i < FOOD_COUNT; i++) {
     state.food.push(randomEmptyCell(state));
   }
@@ -86,9 +104,13 @@ export function spawnSnake(state: SnakeSimState, playerId: string, displayName: 
     segments.push({ x: head.x - offset.x * i, y: head.y - offset.y * i });
   }
 
+  const color = SNAKE_COLORS[state.nextColorIndex % SNAKE_COLORS.length]!;
+  state.nextColorIndex += 1;
+
   const snake: Snake = {
     playerId,
     displayName,
+    color,
     segments,
     direction,
     pendingDirection: direction,
