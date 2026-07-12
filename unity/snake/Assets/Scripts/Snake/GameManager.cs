@@ -1,0 +1,203 @@
+using System;
+using System.Collections;
+using System.Text;
+using Newtonsoft.Json.Linq;
+using UnityEngine;
+using UnityEngine.Networking;
+using UnityEngine.UI;
+
+namespace GamingPool.Snake
+{
+    // Orchestrates the whole client flow: hit the Global API's matchmaking
+    // endpoint to get { server, roomId }, connect directly to that game-server
+    // over WebSocket (client never proxies game traffic through the API), then
+    // relay state updates to the renderers and input to the server.
+    public class GameManager : MonoBehaviour
+    {
+        [Header("Global API")]
+        [SerializeField] private string apiBaseUrl = "http://localhost:4000";
+        [SerializeField] private string gameSlug = "snake";
+
+        [Header("Scene references")]
+        [SerializeField] private NetworkClient networkClient;
+        [SerializeField] private SnakeRenderer snakeRenderer;
+        [SerializeField] private FoodRenderer foodRenderer;
+        [SerializeField] private Text statusText;
+        [SerializeField] private Text scoreText;
+        [SerializeField] private GameObject gameOverPanel;
+
+        private string _playerId;
+        private string _localPlayerId;
+        private Direction _lastSentDirection = Direction.None;
+        private bool _isDead;
+
+        private enum Direction { None, Up, Down, Left, Right }
+
+        private void Start()
+        {
+            _playerId = Guid.NewGuid().ToString("N");
+            networkClient.OnOpen += HandleOpen;
+            networkClient.OnMessage += HandleMessage;
+            networkClient.OnClose += HandleClose;
+            networkClient.OnError += HandleError;
+
+            if (gameOverPanel != null) gameOverPanel.SetActive(false);
+            SetStatus("Finding a match...");
+            StartCoroutine(Matchmake());
+        }
+
+        private IEnumerator Matchmake()
+        {
+            var url = $"{apiBaseUrl}/matchmake/{gameSlug}";
+            using var request = new UnityWebRequest(url, "POST");
+            var body = Encoding.UTF8.GetBytes("{}");
+            request.uploadHandler = new UploadHandlerRaw(body);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            yield return request.SendWebRequest();
+
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                SetStatus($"Matchmaking failed: {request.error}");
+                yield break;
+            }
+
+            var json = JObject.Parse(request.downloadHandler.text);
+            var server = json["server"]?.ToString();
+            var roomId = json["roomId"]?.ToString();
+            if (string.IsNullOrEmpty(server) || string.IsNullOrEmpty(roomId))
+            {
+                SetStatus("Matchmaking returned an unexpected response.");
+                yield break;
+            }
+
+            var displayName = $"Player-{_playerId.Substring(0, 4)}";
+            var wsUrl = $"{server}/?roomId={roomId}&playerId={_playerId}&displayName={UnityWebRequest.EscapeURL(displayName)}";
+            SetStatus("Connecting...");
+            networkClient.Connect(wsUrl);
+        }
+
+        private void HandleOpen()
+        {
+            SetStatus(null);
+        }
+
+        private void HandleMessage(string json)
+        {
+            JObject root;
+            try
+            {
+                root = JObject.Parse(json);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+
+            var type = root["type"]?.ToString();
+            var payload = root["payload"];
+            if (payload == null) return;
+
+            switch (type)
+            {
+                case "welcome":
+                    var welcome = payload.ToObject<WelcomePayload>();
+                    _localPlayerId = welcome.PlayerId;
+                    break;
+                case "state":
+                    var state = payload.ToObject<StatePayload>();
+                    snakeRenderer.Render(state.Snakes, _localPlayerId);
+                    foodRenderer.Render(state.Food);
+                    UpdateScore(state);
+                    break;
+                case "died":
+                    var died = payload.ToObject<DiedPayload>();
+                    ShowGameOver(died.Score);
+                    break;
+            }
+        }
+
+        private void HandleClose(int code)
+        {
+            SetStatus($"Disconnected (code {code}).");
+        }
+
+        private void HandleError(string message)
+        {
+            SetStatus($"Connection error: {message}");
+        }
+
+        private void Update()
+        {
+            if (_isDead || string.IsNullOrEmpty(_localPlayerId)) return;
+
+            Direction? direction = null;
+            if (Input.GetKeyDown(KeyCode.UpArrow) || Input.GetKeyDown(KeyCode.W)) direction = Direction.Up;
+            else if (Input.GetKeyDown(KeyCode.DownArrow) || Input.GetKeyDown(KeyCode.S)) direction = Direction.Down;
+            else if (Input.GetKeyDown(KeyCode.LeftArrow) || Input.GetKeyDown(KeyCode.A)) direction = Direction.Left;
+            else if (Input.GetKeyDown(KeyCode.RightArrow) || Input.GetKeyDown(KeyCode.D)) direction = Direction.Right;
+
+            if (direction.HasValue && direction.Value != _lastSentDirection)
+            {
+                _lastSentDirection = direction.Value;
+                SendDirection(direction.Value);
+            }
+        }
+
+        private void SendDirection(Direction direction)
+        {
+            var name = direction switch
+            {
+                Direction.Up => "up",
+                Direction.Down => "down",
+                Direction.Left => "left",
+                Direction.Right => "right",
+                _ => null,
+            };
+            if (name == null) return;
+
+            var msg = new JObject
+            {
+                ["type"] = "input",
+                ["payload"] = new JObject { ["direction"] = name },
+            };
+            networkClient.Send(msg.ToString(Newtonsoft.Json.Formatting.None));
+        }
+
+        private void UpdateScore(StatePayload state)
+        {
+            if (scoreText == null || string.IsNullOrEmpty(_localPlayerId)) return;
+            foreach (var snake in state.Snakes)
+            {
+                if (snake.Id == _localPlayerId)
+                {
+                    scoreText.text = $"Score: {snake.Score}";
+                    return;
+                }
+            }
+        }
+
+        private void ShowGameOver(int score)
+        {
+            _isDead = true;
+            if (gameOverPanel != null) gameOverPanel.SetActive(true);
+            SetStatus($"You died — final score {score}. Refresh to play again.");
+        }
+
+        private void SetStatus(string message)
+        {
+            if (statusText == null) return;
+            statusText.gameObject.SetActive(!string.IsNullOrEmpty(message));
+            statusText.text = message ?? string.Empty;
+        }
+
+        private void OnDestroy()
+        {
+            networkClient.OnOpen -= HandleOpen;
+            networkClient.OnMessage -= HandleMessage;
+            networkClient.OnClose -= HandleClose;
+            networkClient.OnError -= HandleError;
+        }
+    }
+}

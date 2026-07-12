@@ -7,7 +7,8 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "turbo run dev",
+    "dev": "concurrently -n turbo,cdn -c blue,magenta \"turbo run dev\" \"node scripts/serve-cdn.mjs\"",
+    "dev:cdn": "node scripts/serve-cdn.mjs",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "check-types": "turbo run check-types",
@@ -15,6 +16,7 @@
     "db:migrate": "npm run db:migrate -w packages/db"
   },
   "devDependencies": {
+    "concurrently": "^9.1.2",
     "turbo": "^2.3.3",
     "typescript": "^5.7.3"
   },

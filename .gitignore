@@ -9,5 +9,14 @@ next-env.d.ts
 .env.local
 .DS_Store
 unity/*/Build/
+unity/*/Library/
+unity/*/Temp/
+unity/*/Obj/
+unity/*/Logs/
+unity/*/UserSettings/
+unity/*/MemoryCaptures/
+unity/*/*.csproj
+unity/*/*.sln
+unity/*/*.user
 .claude/settings.local.json
 .claude/scheduled_tasks.lock

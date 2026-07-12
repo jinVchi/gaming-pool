@@ -1,5 +1,5 @@
 import Redis from "ioredis";
-import type { GameSlug } from "./room.js";
+import type { GameSlug } from "./room";
 
 export function createRedisClient(url = process.env.REDIS_URL ?? "redis://localhost:6379/1"): Redis {
   return new Redis(url);
