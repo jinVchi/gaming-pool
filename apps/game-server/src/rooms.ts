@@ -4,6 +4,7 @@ import {
   roomKey,
   roomsKey,
   roomCodeKey,
+  roomListKey,
   gameConfigs,
 } from "@gaming-pool/shared";
 import type { Player } from "@gaming-pool/shared";
@@ -102,6 +103,16 @@ export function addPlayer(room: RoomInstance, player: Player, socket: WebSocket)
 
   if (room.isAuto) {
     void redis.zincrby(roomsKey(room.slug), 1, room.roomId);
+  } else {
+    // Generic bookkeeping for `created`-policy rooms (public listing, e.g.
+    // chess): the room-server — not any individual game module — owns this,
+    // so it applies to every created-policy game without per-game code.
+    const update: Record<string, string | number> = { playerCount: room.players.size };
+    if (room.players.size === 1) update.hostName = player.displayName;
+    void redis.hset(roomKey(room.roomId), update);
+    if (room.players.size >= room.maxPlayers) {
+      void redis.srem(roomListKey(room.slug), room.roomId);
+    }
   }
 
   console.log(`[room ${room.roomId}] ${player.displayName} (${player.id}) joined (${room.players.size}/${room.maxPlayers})`);
@@ -132,6 +143,13 @@ export function removePlayer(room: RoomInstance, playerId: string): void {
 
   if (room.isAuto) {
     void redis.zincrby(roomsKey(room.slug), -1, room.roomId);
+  } else if (room.players.size > 0) {
+    void redis.hset(roomKey(room.roomId), { playerCount: room.players.size });
+    // Re-open the seat in public listing (code-based rooms are never listed,
+    // so never re-add them here).
+    if (!room.joinCode && room.players.size < room.maxPlayers) {
+      void redis.sadd(roomListKey(room.slug), room.roomId);
+    }
   }
 
   console.log(`[room ${room.roomId}] ${playerId} left (${room.players.size}/${room.maxPlayers})`);
@@ -152,6 +170,7 @@ async function destroyRoom(room: RoomInstance, reason: string): Promise<void> {
   pipeline.del(roomKey(room.roomId));
   if (room.isAuto) pipeline.zrem(roomsKey(room.slug), room.roomId);
   if (room.joinCode) pipeline.del(roomCodeKey(room.joinCode));
+  pipeline.srem(roomListKey(room.slug), room.roomId);
   await pipeline.exec();
 
   console.log(`[room ${room.roomId}] closed (${reason})`);

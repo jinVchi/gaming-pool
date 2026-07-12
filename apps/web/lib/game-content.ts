@@ -22,4 +22,15 @@ export const gameContent: Record<GameSlug, GameContent> = {
     ],
     genre: "Arcade",
   },
+  chess: {
+    title: "Chess",
+    description:
+      "Classic two-player chess. Create a room and wait for a challenger, or join someone else's open game from the lobby.",
+    howToPlay: [
+      "Create a room, or join an open one from the room list.",
+      "The room owner starts the match once the other player is ready.",
+      "Tap a piece, then tap a square to move it — standard chess rules apply.",
+    ],
+    genre: "Board",
+  },
 };

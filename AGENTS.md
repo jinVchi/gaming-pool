@@ -53,18 +53,18 @@ unity/            # Unity projects (one per game); WebGL builds output here
 - Force full page load when leaving a game page (Unity WebGL memory is not reliably released on SPA navigation).
 
 ## Web app rules
-
 - Game pages are SSG: title, description, how-to-play, screenshots, `VideoGame` JSON-LD. Unity loads client-side only, after user interaction, via `dynamic import` with `ssr: false`.
 - Do not import game logic or Unity assets into `apps/web`.
 - Every game page needs real SEO content — not a two-line stub.
 
 ## Conventions
-
 - TypeScript strict mode everywhere. Shared message protocol types live in `packages/shared` — never duplicate them.
 - Drizzle for all DB access; migrations in `packages/db`.
 - Prefer English identifiers/comments.
 - Keep answers to "should this hit Postgres?" biased toward **no** — check if Redis or in-memory state suffices first.
 - Modifiy this agents.md when necessary.
+
+
 ## Commands
 
 ```bash

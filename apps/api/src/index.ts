@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { gameConfigs } from "@gaming-pool/shared";
 import { auth } from "./auth";
-import { assignAutoRoom, createRoom, joinRoomByCode } from "./matchmaking";
+import { assignAutoRoom, createRoom, joinRoomByCode, joinRoomById, listOpenRooms } from "./matchmaking";
 
 const app = new Hono();
 
@@ -39,7 +39,8 @@ app.post("/matchmake/:slug", async (c) => {
   return c.json({ error: `game "${slug}" uses 'created' policy — use POST /rooms/:slug` }, 400);
 });
 
-// created policy: host creates a room and shares the joinCode with others.
+// created policy: host creates a room. Games configured with joinCode:true
+// share a private code out-of-band; others are publicly listed for browsing.
 app.post("/rooms/:slug", async (c) => {
   const slug = c.req.param("slug");
   const config = gameConfigs[slug];
@@ -49,13 +50,32 @@ app.post("/rooms/:slug", async (c) => {
   return c.json(await createRoom(slug));
 });
 
+// Public room browser — only for created-policy games that don't use a joinCode.
+app.get("/rooms/:slug", async (c) => {
+  const slug = c.req.param("slug");
+  const config = gameConfigs[slug];
+  if (!config || config.policy !== "created" || config.joinCode) {
+    return c.json({ error: `game "${slug}" does not use public room listing` }, 400);
+  }
+  return c.json(await listOpenRooms(slug));
+});
+
 app.post("/rooms/:slug/join", async (c) => {
   const slug = c.req.param("slug");
-  const { joinCode } = await c.req.json<{ joinCode: string }>();
-  if (!joinCode) return c.json({ error: "joinCode is required" }, 400);
+  const config = gameConfigs[slug];
+  if (!config || config.policy !== "created") {
+    return c.json({ error: `game "${slug}" does not use 'created' policy` }, 400);
+  }
+
+  const body = await c.req.json<{ joinCode?: string; roomId?: string }>();
 
   try {
-    return c.json(await joinRoomByCode(slug, joinCode));
+    if (config.joinCode) {
+      if (!body.joinCode) return c.json({ error: "joinCode is required" }, 400);
+      return c.json(await joinRoomByCode(slug, body.joinCode));
+    }
+    if (!body.roomId) return c.json({ error: "roomId is required" }, 400);
+    return c.json(await joinRoomById(slug, body.roomId));
   } catch (err) {
     return c.json({ error: (err as Error).message }, 404);
   }
