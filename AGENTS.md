@@ -64,7 +64,7 @@ unity/            # Unity projects (one per game); WebGL builds output here
 - Drizzle for all DB access; migrations in `packages/db`.
 - Prefer English identifiers/comments.
 - Keep answers to "should this hit Postgres?" biased toward **no** — check if Redis or in-memory state suffices first.
-
+- Modifiy this agents.md when necessary.
 ## Commands
 
 ```bash
