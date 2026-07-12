@@ -16,21 +16,13 @@ namespace GamingPool.Chess
         [SerializeField] private float cellSize = 1f;
         [SerializeField] private Color whitePieceColor = Color.white;
         [SerializeField] private Color blackPieceColor = Color.black;
+        // Outline behind each letter so pieces stay readable on same-tone squares
+        // (white letter on light square, black letter on dark square).
+        [SerializeField] private Color whitePieceOutlineColor = new Color(0.1f, 0.1f, 0.1f);
+        [SerializeField] private Color blackPieceOutlineColor = new Color(0.85f, 0.85f, 0.85f);
         [SerializeField] private Color lightSquareColor = new Color(0.9f, 0.9f, 0.8f);
         [SerializeField] private Color darkSquareColor = new Color(0.35f, 0.25f, 0.2f);
         [SerializeField] private Color selectedSquareColor = Color.yellow;
-
-        // Unicode chess glyphs (♔♕♖♗♘♙ / ♚♛♜♝♞♟) — the only zero-asset option
-        // available here. Whether the active font actually has these glyphs is
-        // untested; flip this off in the Inspector to fall back to plain
-        // letters (P/N/B/R/Q/K) if they render as blank boxes.
-        [SerializeField] private bool useUnicodeGlyphs = true;
-
-        private static readonly Dictionary<char, string> PieceGlyphs = new Dictionary<char, string>
-        {
-            ['K'] = "♔", ['Q'] = "♕", ['R'] = "♖", ['B'] = "♗", ['N'] = "♘", ['P'] = "♙",
-            ['k'] = "♚", ['q'] = "♛", ['r'] = "♜", ['b'] = "♝", ['n'] = "♞", ['p'] = "♟",
-        };
 
         public event Action<string, string, string> OnMoveAttempted; // from, to, promotion (may be null)
 
@@ -76,11 +68,13 @@ namespace GamingPool.Chess
                     _pieces[kvp.Key] = go;
                 }
                 PositionAtSquare(go.transform, kvp.Key);
-                var mesh = go.GetComponent<TextMesh>();
-                mesh.text = useUnicodeGlyphs && PieceGlyphs.TryGetValue(kvp.Value, out var glyph)
-                    ? glyph
-                    : char.ToUpper(kvp.Value).ToString();
-                mesh.color = char.IsUpper(kvp.Value) ? whitePieceColor : blackPieceColor;
+                var label = char.ToUpper(kvp.Value).ToString();
+                var isWhite = char.IsUpper(kvp.Value);
+                SetPieceText(
+                    go,
+                    label,
+                    isWhite ? whitePieceColor : blackPieceColor,
+                    isWhite ? whitePieceOutlineColor : blackPieceOutlineColor);
             }
             foreach (var square in stale)
             {
@@ -89,19 +83,57 @@ namespace GamingPool.Chess
             }
         }
 
+        // TextMesh has no outline support, so each piece is one main TextMesh
+        // plus four copies offset diagonally behind it in the outline color —
+        // reads as a contrast margin from the top-down camera.
+        private const float OutlineOffset = 0.045f;
+
+        private static readonly Vector2[] OutlineOffsets =
+        {
+            new Vector2(-OutlineOffset, -OutlineOffset),
+            new Vector2(-OutlineOffset, OutlineOffset),
+            new Vector2(OutlineOffset, -OutlineOffset),
+            new Vector2(OutlineOffset, OutlineOffset),
+        };
+
         private GameObject CreatePieceLabel()
         {
-            var go = new GameObject("piece");
-            go.transform.SetParent(transform, false);
+            var root = new GameObject("piece");
+            root.transform.SetParent(transform, false);
+
+            foreach (var offset in OutlineOffsets)
+            {
+                // Local +z faces away from the camera once the root is rotated
+                // face-up, keeping outline copies rendered behind the main text.
+                CreateTextMesh(root.transform, "outline", new Vector3(offset.x, offset.y, 0.01f));
+            }
+            CreateTextMesh(root.transform, "label", Vector3.zero);
+
+            return root;
+        }
+
+        private static void CreateTextMesh(Transform parent, string name, Vector3 localPosition)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = localPosition;
             var mesh = go.AddComponent<TextMesh>();
             mesh.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            var pieceRenderer = go.GetComponent<MeshRenderer>();
-            if (pieceRenderer != null) pieceRenderer.material = mesh.font.material;
+            var meshRenderer = go.GetComponent<MeshRenderer>();
+            if (meshRenderer != null) meshRenderer.material = mesh.font.material;
             mesh.fontSize = 64;
             mesh.characterSize = 0.12f;
             mesh.anchor = TextAnchor.MiddleCenter;
             mesh.alignment = TextAlignment.Center;
-            return go;
+        }
+
+        private static void SetPieceText(GameObject pieceRoot, string label, Color mainColor, Color outlineColor)
+        {
+            foreach (var mesh in pieceRoot.GetComponentsInChildren<TextMesh>())
+            {
+                mesh.text = label;
+                mesh.color = mesh.gameObject.name == "label" ? mainColor : outlineColor;
+            }
         }
 
         private void PositionAtSquare(Transform t, string square)

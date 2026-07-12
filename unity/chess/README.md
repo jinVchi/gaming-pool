@@ -71,12 +71,12 @@ square to move — the board never assumes a move is legal until the server's
 `move` broadcast confirms it; an illegal attempt just does nothing visible
 (check the status text for the rejection).
 
-Pieces render as Unicode chess glyphs (♔♕♖♗♘♙ / ♚♛♜♝♞♟) — the only
-zero-asset option available without real art. Whether the active font
-actually contains those glyphs wasn't testable ahead of time; if they show
-up as blank boxes, select the `Board` GameObject in the Hierarchy and
-untick **Use Unicode Glyphs** on its `BoardRenderer` component to fall back
-to plain letters (P/N/B/R/Q/K).
+Pieces render as plain letters (P/N/B/R/Q/K) with a contrast outline —
+white letters get a dark outline, black letters a light one, so both stay
+readable on same-tone squares. (Unicode chess glyphs were tried and dropped:
+WebGL builds have no OS font fallback, so ♔♕♖ render as nothing in the
+browser even when they work in the Editor. Proper piece icons need either a
+TTF containing those glyphs added to `Assets/Fonts/`, or sprite art.)
 
 ## WebGL build → local CDN dev server
 
