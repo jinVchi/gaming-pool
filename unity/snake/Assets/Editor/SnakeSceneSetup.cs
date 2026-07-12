@@ -10,6 +10,12 @@ namespace GamingPool.Snake.Editor
     // .unity file, which is fragile to write correctly without a real Editor to
     // verify it in. Run once via Gaming Pool > Setup Snake Scene, then save the
     // scene (Ctrl+S) as Assets/Scenes/Snake.unity.
+    //
+    // Deliberately avoids `GetComponent<T>() ?? AddComponent<T>()` throughout:
+    // C#'s ?? operator does a raw reference check and does not go through
+    // UnityEngine.Object's overloaded == operator, which is the one Unity
+    // actually wants you to use. Every lookup below uses an explicit `== null`
+    // check instead.
     public static class SnakeSceneSetup
     {
         private const float GridWorldSize = 60f;
@@ -27,6 +33,19 @@ namespace GamingPool.Snake.Editor
 
             EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
             Debug.Log("Snake scene set up. Save the scene as Assets/Scenes/Snake.unity (Ctrl+S).");
+        }
+
+        private static GameObject FindOrCreate(string name)
+        {
+            var existing = GameObject.Find(name);
+            return existing != null ? existing : new GameObject(name);
+        }
+
+        private static T GetOrAddComponent<T>(GameObject obj) where T : Component
+        {
+            var component = obj.GetComponent<T>();
+            if (component == null) component = obj.AddComponent<T>();
+            return component;
         }
 
         private static GameObject CreateOrLoadPrefab(string name, PrimitiveType primitive, Vector3 scale)
@@ -51,9 +70,8 @@ namespace GamingPool.Snake.Editor
 
         private static void SetupCamera()
         {
-            var cameraObj = GameObject.Find("Main Camera") ?? new GameObject("Main Camera");
-            if (cameraObj.GetComponent<Camera>() == null) cameraObj.AddComponent<Camera>();
-            var camera = cameraObj.GetComponent<Camera>();
+            var cameraObj = FindOrCreate("Main Camera");
+            var camera = GetOrAddComponent<Camera>(cameraObj);
 
             camera.orthographic = true;
             camera.orthographicSize = GridWorldSize / 2f + 5f;
@@ -64,18 +82,19 @@ namespace GamingPool.Snake.Editor
 
         private static Canvas SetupCanvas(out Text statusText, out Text scoreText, out GameObject gameOverPanel)
         {
-            var canvasObj = GameObject.Find("Canvas") ?? new GameObject("Canvas");
-            var canvas = canvasObj.GetComponent<Canvas>() ?? canvasObj.AddComponent<Canvas>();
+            var canvasObj = FindOrCreate("Canvas");
+            var canvas = GetOrAddComponent<Canvas>(canvasObj);
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            if (canvasObj.GetComponent<CanvasScaler>() == null) canvasObj.AddComponent<CanvasScaler>();
-            if (canvasObj.GetComponent<GraphicRaycaster>() == null) canvasObj.AddComponent<GraphicRaycaster>();
+            GetOrAddComponent<CanvasScaler>(canvasObj);
+            GetOrAddComponent<GraphicRaycaster>(canvasObj);
 
-            if (GameObject.Find("EventSystem") == null)
+            var eventSystemObj = GameObject.Find("EventSystem");
+            if (eventSystemObj == null)
             {
-                var eventSystemObj = new GameObject("EventSystem");
-                eventSystemObj.AddComponent<UnityEngine.EventSystems.EventSystem>();
-                eventSystemObj.AddComponent<UnityEngine.EventSystems.StandaloneInputModule>();
+                eventSystemObj = new GameObject("EventSystem");
             }
+            GetOrAddComponent<UnityEngine.EventSystems.EventSystem>(eventSystemObj);
+            GetOrAddComponent<UnityEngine.EventSystems.StandaloneInputModule>(eventSystemObj);
 
             statusText = CreateText(canvasObj.transform, "StatusText", new Vector2(0f, 100f), 28);
             scoreText = CreateText(canvasObj.transform, "ScoreText", new Vector2(0f, -300f), 24);
@@ -84,8 +103,8 @@ namespace GamingPool.Snake.Editor
             scoreText.rectTransform.anchorMax = new Vector2(0f, 1f);
             scoreText.rectTransform.anchoredPosition = new Vector2(20f, -20f);
 
-            gameOverPanel = GameObject.Find("GameOverPanel");
-            if (gameOverPanel == null)
+            var existingPanel = GameObject.Find("GameOverPanel");
+            if (existingPanel == null)
             {
                 gameOverPanel = new GameObject("GameOverPanel", typeof(RectTransform));
                 gameOverPanel.transform.SetParent(canvasObj.transform, false);
@@ -97,6 +116,10 @@ namespace GamingPool.Snake.Editor
                 rect.offsetMin = Vector2.zero;
                 rect.offsetMax = Vector2.zero;
             }
+            else
+            {
+                gameOverPanel = existingPanel;
+            }
             gameOverPanel.SetActive(false);
 
             return canvas;
@@ -105,10 +128,10 @@ namespace GamingPool.Snake.Editor
         private static Text CreateText(Transform parent, string name, Vector2 anchoredPosition, int fontSize)
         {
             var existing = parent.Find(name);
-            GameObject textObj = existing != null ? existing.gameObject : new GameObject(name, typeof(RectTransform));
+            var textObj = existing != null ? existing.gameObject : new GameObject(name, typeof(RectTransform));
             textObj.transform.SetParent(parent, false);
 
-            var text = textObj.GetComponent<Text>() ?? textObj.AddComponent<Text>();
+            var text = GetOrAddComponent<Text>(textObj);
             text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             text.fontSize = fontSize;
             text.alignment = TextAnchor.MiddleCenter;
@@ -131,19 +154,18 @@ namespace GamingPool.Snake.Editor
             Text scoreText,
             GameObject gameOverPanel)
         {
-            var gmObj = GameObject.Find("GameManager") ?? new GameObject("GameManager");
+            var gmObj = FindOrCreate("GameManager");
+            var networkClient = GetOrAddComponent<NetworkClient>(gmObj);
 
-            var networkClient = gmObj.GetComponent<NetworkClient>() ?? gmObj.AddComponent<NetworkClient>();
-
-            var rendererObj = GameObject.Find("SnakeRenderer") ?? new GameObject("SnakeRenderer");
-            var snakeRenderer = rendererObj.GetComponent<SnakeRenderer>() ?? rendererObj.AddComponent<SnakeRenderer>();
+            var rendererObj = FindOrCreate("SnakeRenderer");
+            var snakeRenderer = GetOrAddComponent<SnakeRenderer>(rendererObj);
             SetPrivateField(snakeRenderer, "segmentPrefab", segmentPrefab);
 
-            var foodRendererObj = GameObject.Find("FoodRenderer") ?? new GameObject("FoodRenderer");
-            var foodRenderer = foodRendererObj.GetComponent<FoodRenderer>() ?? foodRendererObj.AddComponent<FoodRenderer>();
+            var foodRendererObj = FindOrCreate("FoodRenderer");
+            var foodRenderer = GetOrAddComponent<FoodRenderer>(foodRendererObj);
             SetPrivateField(foodRenderer, "foodPrefab", foodPrefab);
 
-            var gameManager = gmObj.GetComponent<GameManager>() ?? gmObj.AddComponent<GameManager>();
+            var gameManager = GetOrAddComponent<GameManager>(gmObj);
             SetPrivateField(gameManager, "networkClient", networkClient);
             SetPrivateField(gameManager, "snakeRenderer", snakeRenderer);
             SetPrivateField(gameManager, "foodRenderer", foodRenderer);

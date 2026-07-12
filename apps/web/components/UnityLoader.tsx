@@ -25,25 +25,33 @@ export function UnityLoader({ slug }: { slug: string }) {
     let unityInstance: UnityInstance | null = null;
     let cancelled = false;
 
-    const buildUrl = `${CDN_URL}/${slug}/Build`;
+    // Unity's WebGL output names the sub-files after the build's output folder
+    // and nests them in a Build/ subfolder. Convention: each game is built into
+    // unity/{slug}/Build, so the files land at unity/{slug}/Build/Build/Build.*
+    // (served by the CDN at {slug}/Build/Build/Build.*).
+    const buildUrl = `${CDN_URL}/${slug}/Build/Build`;
+    const buildName = "Build";
     const script = document.createElement("script");
-    script.src = `${buildUrl}/${slug}.loader.js`;
+    script.src = `${buildUrl}/${buildName}.loader.js`;
 
     script.onload = async () => {
       if (cancelled || !canvasRef.current || !window.createUnityInstance) return;
       try {
         unityInstance = await window.createUnityInstance(canvasRef.current, {
-          dataUrl: `${buildUrl}/${slug}.data`,
-          frameworkUrl: `${buildUrl}/${slug}.framework.js`,
-          codeUrl: `${buildUrl}/${slug}.wasm`,
+          dataUrl: `${buildUrl}/${buildName}.data`,
+          frameworkUrl: `${buildUrl}/${buildName}.framework.js`,
+          codeUrl: `${buildUrl}/${buildName}.wasm`,
+          companyName: "Gaming Pool",
+          productName: slug,
+          productVersion: "1.0",
         });
       } catch (err) {
-        if (!cancelled) setError(`Failed to start ${slug}: ${(err as Error).message}`);
+        if (!cancelled) setError(`Failed to start ${slug}: ${(err as Error)?.message ?? String(err)}`);
       }
     };
     script.onerror = () => {
       if (!cancelled) {
-        setError(`Build not found at ${buildUrl} — has it been uploaded to unity/${slug}/Build?`);
+        setError(`Build not found at ${buildUrl} — build unity/${slug} into a folder named Build.`);
       }
     };
     document.body.appendChild(script);
@@ -59,5 +67,16 @@ export function UnityLoader({ slug }: { slug: string }) {
     return <p role="alert">{error}</p>;
   }
 
-  return <canvas ref={canvasRef} width={960} height={600} />;
+  // Unity 6's loader requires the canvas to have an HTML id, and reads its CSS
+  // size to build the framebuffer — without explicit CSS dimensions the
+  // framebuffer attachment comes out zero-sized.
+  return (
+    <canvas
+      ref={canvasRef}
+      id="unity-canvas"
+      width={960}
+      height={600}
+      style={{ width: 960, height: 600, display: "block" }}
+    />
+  );
 }

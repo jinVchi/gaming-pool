@@ -1,10 +1,27 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { gameConfigs } from "@gaming-pool/shared";
 import { auth } from "./auth";
 import { assignAutoRoom, createRoom, joinRoomByCode } from "./matchmaking";
 
 const app = new Hono();
+
+// The Unity WebGL client (served from apps/web) calls matchmaking cross-origin.
+// WEB_ORIGIN is a comma-separated allowlist; defaults to the local web dev server.
+const allowedOrigins = (process.env.WEB_ORIGIN ?? "http://localhost:3000")
+  .split(",")
+  .map((o) => o.trim());
+
+app.use(
+  "*",
+  cors({
+    origin: allowedOrigins,
+    allowMethods: ["GET", "POST", "OPTIONS"],
+    allowHeaders: ["Content-Type"],
+    credentials: true,
+  }),
+);
 
 app.get("/health", (c) => c.json({ ok: true }));
 
