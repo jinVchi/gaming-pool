@@ -64,7 +64,7 @@ export function UnityLoader({ slug }: { slug: string }) {
   }, [slug]);
 
   if (error) {
-    return <p role="alert">{error}</p>;
+    return <p className="game-status" role="alert">{error}</p>;
   }
 
   // Unity 6's loader requires the canvas to have an HTML id, and reads its CSS
@@ -74,9 +74,10 @@ export function UnityLoader({ slug }: { slug: string }) {
     <canvas
       ref={canvasRef}
       id="unity-canvas"
+      className="game-canvas"
       width={960}
       height={600}
-      style={{ width: 960, height: 600, display: "block" }}
+      style={{ width: 960, height: 600 }}
     />
   );
 }

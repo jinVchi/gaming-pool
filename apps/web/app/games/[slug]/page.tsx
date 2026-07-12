@@ -42,12 +42,14 @@ export default async function GamePage({ params }: GamePageParams) {
 
   return (
     <main>
-      <a href="/">← Back to lobby</a>
+      <a href="/" className="back-link">
+        ← Back to lobby
+      </a>
       <h1>{content.title}</h1>
       <p>{content.description}</p>
       <section>
         <h2>How to play</h2>
-        <ol>
+        <ol className="how-to-play">
           {content.howToPlay.map((step) => (
             <li key={step}>{step}</li>
           ))}

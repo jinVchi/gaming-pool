@@ -13,7 +13,7 @@ export function PlayShell({ slug }: { slug: string }) {
   if (!started) {
     return (
       <div>
-        <button type="button" onClick={() => setStarted(true)}>
+        <button type="button" className="play-button" onClick={() => setStarted(true)}>
           Play
         </button>
       </div>
