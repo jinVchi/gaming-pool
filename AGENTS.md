@@ -19,10 +19,11 @@ apps/
   api/            # Global API: auth, matchmaking (Hono)
   game-server/    # Regional WebSocket server (Node + ws)
 packages/
-  shared/         # Shared types: room, player, message protocol
-  games/          # Server-side game logic modules (one folder per game)
-  db/             # Drizzle schema + migrations
-unity/            # Unity projects (one per game); WebGL builds output here
+  shared/         # Shared types (room, player, protocol), Redis client/keys, gameConfigs
+  games/          # Server-side game logic modules (one folder per game) + gameModules registry
+  db/             # Drizzle schema + migrations (incl. Better Auth generated schema)
+scripts/          # Dev-only helpers (serve-cdn.mjs: local stand-in for the R2 CDN, port 8787)
+unity/            # Unity projects (one per game); WebGL builds output here (gitignored)
 ```
 
 ## Core architecture rules
@@ -30,26 +31,30 @@ unity/            # Unity projects (one per game); WebGL builds output here
 1. **Client connects directly to game servers via WebSocket.** The Global API only assigns `{server, roomId}`; game traffic never proxies through it or through Vercel.
 2. **Unity builds never touch Vercel.** They live in R2 with `Content-Encoding: br` headers. Game pages reference CDN URLs in `createUnityInstance` config.
 3. **Postgres is off the hot path.** Game ticks and room state stay in memory/Redis. Postgres writes (scores, ratings) are async and batched.
-4. **Redis = ephemeral room registry only.** Keys: `rooms:{game}` (sorted set by player count), `room:{roomId}` (hash: server, game, maxPlayers, joinCode). Game servers update on join/leave; matchmaking reads.
+4. **Redis = ephemeral room registry only.** Keys: `rooms:{game}` (sorted set by player count, auto-policy games), `room:{roomId}` (hash: server, game, maxPlayers, and for created-policy rooms joinCode or hostName+playerCount), `roomcode:{joinCode}` (code → roomId), `roomlist:{game}` (set of publicly-joinable created-policy rooms with an open seat). Game servers update on join/leave; matchmaking reads. Key builders live in `packages/shared/src/redis.ts` — never hand-format keys.
 
 ## Multi-game conventions
 
 - Every game is identified by a **slug** (e.g. `snake`, `beatemup`, etc) used consistently in: URL routes (`/games/[slug]`), R2 paths (`games/{slug}/Build/`), Redis keys, DB rows, and `packages/games/{slug}`.
-- **Room policy is per-game config**, not per-game code paths in matchmaking:
+- **Room policy is per-game config**, not per-game code paths in matchmaking (real entries):
   ```ts
   { snake:    { policy: "auto",    maxPlayers: 20, fillStrategy: "fullest" },
-    beatemup: { policy: "created", maxPlayers: 4,  joinCode: true } }
+    chess:    { policy: "created", maxPlayers: 2 },                  // no joinCode → publicly listed
+    beatemup: { policy: "created", maxPlayers: 4,  joinCode: true } } // (future) private, join via code
   ```
-  - `auto`: allocate player to fullest non-full room in their region; create room if none.
-  - `created`: player creates room, others join via code/lobby.
-- Adding a new game must NOT require changes to matchmaking internals, the game server host loop, or the web shell — only: a game logic module in `packages/games/`, a config entry, a Unity build in R2, and a game page with SEO content.
-- Each room runs its own tick loop; game logic modules expose a common interface (`onJoin`, `onLeave`, `onMessage`, `tick`).
+  - `auto`: allocate player to fullest non-full room in their region; create room if none. Rooms are rolling.
+  - `created` + `joinCode: true`: player creates a private room, shares the code out-of-band (`POST /rooms/:slug/join` with `joinCode`).
+  - `created` without `joinCode`: room is publicly listed (`GET /rooms/:slug` → open rooms with hostName/playerCount) and joined by `roomId`. The room server maintains list membership generically (delist when full, relist when a seat opens).
+- Adding a new game must NOT require changes to matchmaking internals, the game server host loop, or the web shell — only: a game logic module + registration in `packages/games/src/registry.ts`, a config entry in `packages/shared/src/game-config.ts`, SEO content in `apps/web/lib/game-content.ts`, and a Unity build. All three registries are keyed by the same slug.
+- Each room runs its own tick loop; game logic modules expose a common interface: `createState(roomId, ctx)`, `onJoin`, `onLeave`, `onMessage`, `tick`. The `ctx` (RoomContext) provides `broadcast`/`send` — modules never touch sockets directly.
+- Server logic is authoritative; Unity clients are renderers + input devices. For rules-heavy games prefer an established library over hand-rolling (chess uses `chess.js`).
 
 ## Game server rules
 - `perMessageDeflate: false` (tiny packets; compression adds latency).
 - Implement heartbeat: ping/pong, terminate dead sockets.
-- On join/leave: update regional Redis room counts.
-- Rooms with `policy: auto` are rolling (players join mid-game); destroy after N minutes empty.
+- On join/leave: update regional Redis room counts (auto policy) or playerCount/hostName/roomlist membership (created policy). This bookkeeping lives in the room server (`apps/game-server/src/rooms.ts`), never in game modules.
+- Rooms with `policy: auto` are rolling (players join mid-game); destroyed after 5 min empty. `created`-policy rooms are destroyed immediately when the last player leaves.
+- Clients connect with `?roomId=&playerId=&displayName=` query params; room metadata is resolved from Redis on first connection.
 - Force full page load when leaving a game page (Unity WebGL memory is not reliably released on SPA navigation).
 
 ## Web app rules
@@ -59,19 +64,30 @@ unity/            # Unity projects (one per game); WebGL builds output here
 
 ## Conventions
 - TypeScript strict mode everywhere. Shared message protocol types live in `packages/shared` — never duplicate them.
-- Drizzle for all DB access; migrations in `packages/db`.
+- **Internal relative imports are extensionless** (`from "./schema"`, never `"./schema.js"`). `.js`-suffixed imports break drizzle-kit's config loader and Next.js's webpack resolver. All tsconfigs use `moduleResolution: "Bundler"`.
+- Drizzle for all DB access; migrations in `packages/db`. Better Auth owns the identity tables (`user`, `session`, `account`, `verification` — regenerate via its CLI, don't hand-edit `auth-schema.ts`); game tables (`scores`, `ratings`) reference `user.id`.
 - Prefer English identifiers/comments.
 - Keep answers to "should this hit Postgres?" biased toward **no** — check if Redis or in-memory state suffices first.
+- Unity C# in `unity/*/Assets` mirrors the server wire protocol via Newtonsoft.Json DTOs (`Models.cs`) — when a module's protocol changes, update the matching DTOs. Each Unity project is self-contained (the WebSocket `.jslib` bridge + `NetworkClient.cs` are intentionally duplicated per project).
 - Modifiy this agents.md when necessary.
 
+
+## Local development
+
+- Postgres and Redis reuse pre-existing Docker containers on the dev machine (no docker-compose in this repo): `postgres-db` (postgres:17, root/000000, db `gaming_pool` — the `ecommerce` db in the same container belongs to another project) and `redis-server` (redis:8, **logical DB 1**: `redis://localhost:6379/1`).
+- Ports: web 3000, api 4000, game-server 5000, CDN dev server 8787.
+- Each app has a gitignored `.env` (see committed `.env.example` for expected vars). CORS/auth origins come from `WEB_ORIGIN` on the api.
+- Unity WebGL builds go to `unity/{slug}/Build`; Unity names the output after the folder, so files land at `unity/{slug}/Build/Build/Build.*` — the web loader (`apps/web/components/UnityLoader.tsx`) expects exactly that layout. Keep the same layout when uploading to R2.
 
 ## Commands
 
 ```bash
 npm install              # root install (Turborepo workspaces)
-npm run dev              # all apps in dev mode
+npm run dev              # all apps in dev mode + CDN dev server (concurrently)
 npm run dev -w apps/web  # single workspace
 npm run build            # turbo build
+npm run check-types      # type-check all workspaces — run after any TS change
+npm run db:generate      # drizzle-kit generate (packages/db)
 npm run db:migrate       # drizzle migrations
 ```
 
@@ -81,3 +97,4 @@ npm run db:migrate       # drizzle migrations
 - `apps/api` → Fly.io (single region to start)
 - `apps/game-server` → Fly.io, multi-region (e.g. nrt, iad, fra); regional Redis per deployment
 - Unity builds → uploaded to R2 via wrangler/S3 API in CI; set `Content-Encoding: br` + correct `Content-Type` per file
+- **Open decision before multi-region**: per-region Redis registries break publicly-listed rooms (a chess room created in nrt is invisible to a player browsing from fra). Latency-insensitive games likely need a `scope: "global"` per-game config (single home region or global registry) while latency-sensitive games stay regional. Decide before the multi-region deployment bakes in the per-region assumption.
