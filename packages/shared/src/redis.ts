@@ -17,6 +17,14 @@ export function roomCodeKey(joinCode: string): string {
   return `roomcode:${joinCode}`;
 }
 
+// Player → roomId of the room they are currently hosting or playing in.
+// Reserved (NX, short TTL) when a room is created, made persistent when the
+// player's WebSocket actually joins, cleared on leave — enforces one active
+// room/game per player across tabs and devices.
+export function playerRoomKey(playerId: string): string {
+  return `playerroom:${playerId}`;
+}
+
 // Public listing of joinable `created`-policy rooms that don't use a joinCode
 // (e.g. chess) — a room is a member while it has an open seat, removed once
 // full or destroyed. `beatemup`-style code-based rooms never appear here.

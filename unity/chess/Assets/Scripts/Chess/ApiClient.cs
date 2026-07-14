@@ -22,14 +22,14 @@ namespace GamingPool.Chess
             StartCoroutine(ListRoomsRoutine(onSuccess, onError));
         }
 
-        public void CreateRoom(Action<RoomAssignment> onSuccess, Action<string> onError)
+        public void CreateRoom(string playerId, string displayName, Action<RoomAssignment> onSuccess, Action<string> onError)
         {
-            StartCoroutine(CreateRoomRoutine(onSuccess, onError));
+            StartCoroutine(CreateRoomRoutine(playerId, displayName, onSuccess, onError));
         }
 
-        public void JoinRoom(string roomId, Action<RoomAssignment> onSuccess, Action<string> onError)
+        public void JoinRoom(string roomId, string playerId, Action<RoomAssignment> onSuccess, Action<string> onError)
         {
-            StartCoroutine(JoinRoomRoutine(roomId, onSuccess, onError));
+            StartCoroutine(JoinRoomRoutine(roomId, playerId, onSuccess, onError));
         }
 
         private IEnumerator ListRoomsRoutine(Action<List<OpenRoom>> onSuccess, Action<string> onError)
@@ -47,26 +47,27 @@ namespace GamingPool.Chess
             onSuccess?.Invoke(rooms);
         }
 
-        private IEnumerator CreateRoomRoutine(Action<RoomAssignment> onSuccess, Action<string> onError)
+        private IEnumerator CreateRoomRoutine(string playerId, string displayName, Action<RoomAssignment> onSuccess, Action<string> onError)
         {
+            var body = new JObject { ["playerId"] = playerId, ["displayName"] = displayName }.ToString(Formatting.None);
             using var request = new UnityWebRequest($"{apiBaseUrl}/rooms/{gameSlug}", "POST");
-            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes("{}"));
+            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
             yield return request.SendWebRequest();
 
             if (request.result != UnityWebRequest.Result.Success)
             {
-                onError?.Invoke(request.error);
+                onError?.Invoke(ErrorMessage(request));
                 yield break;
             }
 
             onSuccess?.Invoke(JsonConvert.DeserializeObject<RoomAssignment>(request.downloadHandler.text));
         }
 
-        private IEnumerator JoinRoomRoutine(string roomId, Action<RoomAssignment> onSuccess, Action<string> onError)
+        private IEnumerator JoinRoomRoutine(string roomId, string playerId, Action<RoomAssignment> onSuccess, Action<string> onError)
         {
-            var body = new JObject { ["roomId"] = roomId }.ToString(Formatting.None);
+            var body = new JObject { ["roomId"] = roomId, ["playerId"] = playerId }.ToString(Formatting.None);
             using var request = new UnityWebRequest($"{apiBaseUrl}/rooms/{gameSlug}/join", "POST");
             request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
             request.downloadHandler = new DownloadHandlerBuffer();
@@ -75,14 +76,29 @@ namespace GamingPool.Chess
 
             if (request.result != UnityWebRequest.Result.Success)
             {
-                var message = request.downloadHandler != null && !string.IsNullOrEmpty(request.downloadHandler.text)
-                    ? request.downloadHandler.text
-                    : request.error;
-                onError?.Invoke(message);
+                onError?.Invoke(ErrorMessage(request));
                 yield break;
             }
 
             onSuccess?.Invoke(JsonConvert.DeserializeObject<RoomAssignment>(request.downloadHandler.text));
+        }
+
+        // The API reports failures as { "error": "..." } — surface that message
+        // instead of Unity's generic transport error where possible.
+        private static string ErrorMessage(UnityWebRequest request)
+        {
+            var text = request.downloadHandler?.text;
+            if (string.IsNullOrEmpty(text)) return request.error;
+            try
+            {
+                var message = JObject.Parse(text)["error"]?.ToString();
+                if (!string.IsNullOrEmpty(message)) return message;
+            }
+            catch (Exception)
+            {
+                // not JSON — fall through to the raw body
+            }
+            return text;
         }
     }
 }

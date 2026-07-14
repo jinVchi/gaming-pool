@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { getOrCreateRoom, addPlayer, removePlayer, handleMessage } from "./rooms";
+import { getOrCreateRoom, addPlayer, removePlayer, handleMessage, playerActiveRoom } from "./rooms";
 
 const port = Number(process.env.PORT ?? 5000);
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -28,6 +28,18 @@ wss.on("connection", async (socket, req) => {
   }
   if (room.players.size >= room.maxPlayers) {
     socket.close(4003, "room is full");
+    return;
+  }
+
+  // One live connection per player: reject a second tab into the same room
+  // and reject connecting while busy in a different room.
+  if (room.players.has(playerId)) {
+    socket.close(4005, "already connected to this room");
+    return;
+  }
+  const activeRoom = await playerActiveRoom(playerId);
+  if (activeRoom && activeRoom !== roomId) {
+    socket.close(4005, "already in another game");
     return;
   }
 

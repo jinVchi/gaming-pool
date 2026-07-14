@@ -6,6 +6,10 @@ using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.UI;
 
+#if UNITY_WEBGL && !UNITY_EDITOR
+using System.Runtime.InteropServices;
+#endif
+
 namespace GamingPool.Snake
 {
     // Orchestrates the whole client flow: hit the Global API's matchmaking
@@ -27,15 +31,48 @@ namespace GamingPool.Snake
         [SerializeField] private GameObject gameOverPanel;
 
         private string _playerId;
+        private string _displayName;
         private string _localPlayerId;
         private Direction _lastSentDirection = Direction.None;
         private bool _isDead;
 
         private enum Direction { None, Up, Down, Left, Right }
 
+#if UNITY_WEBGL && !UNITY_EDITOR
+        [DllImport("__Internal")] private static extern string GPGetPlayerIdentity();
+#endif
+
+        // The web shell owns identity (Better Auth user or persisted guest) and
+        // exposes it via window.__gamingPoolPlayer; a random fallback only
+        // applies outside the browser (Editor play mode / standalone).
+        private void ResolveIdentity()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            try
+            {
+                var json = GPGetPlayerIdentity();
+                if (!string.IsNullOrEmpty(json))
+                {
+                    var identity = JObject.Parse(json);
+                    _playerId = identity["playerId"]?.ToString();
+                    _displayName = identity["displayName"]?.ToString();
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"Failed to read player identity from web shell: {e.Message}");
+            }
+#endif
+            if (string.IsNullOrEmpty(_playerId))
+            {
+                _playerId = Guid.NewGuid().ToString("N");
+                _displayName = $"Player-{_playerId.Substring(0, 4)}";
+            }
+        }
+
         private void Start()
         {
-            _playerId = Guid.NewGuid().ToString("N");
+            ResolveIdentity();
             networkClient.OnOpen += HandleOpen;
             networkClient.OnMessage += HandleMessage;
             networkClient.OnClose += HandleClose;
@@ -72,8 +109,7 @@ namespace GamingPool.Snake
                 yield break;
             }
 
-            var displayName = $"Player-{_playerId.Substring(0, 4)}";
-            var wsUrl = $"{server}/?roomId={roomId}&playerId={_playerId}&displayName={UnityWebRequest.EscapeURL(displayName)}";
+            var wsUrl = $"{server}/?roomId={roomId}&playerId={_playerId}&displayName={UnityWebRequest.EscapeURL(_displayName)}";
             SetStatus("Connecting...");
             networkClient.Connect(wsUrl);
         }

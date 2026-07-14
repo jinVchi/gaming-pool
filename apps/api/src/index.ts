@@ -47,7 +47,17 @@ app.post("/rooms/:slug", async (c) => {
   if (!config || config.policy !== "created") {
     return c.json({ error: `game "${slug}" does not use 'created' policy` }, 400);
   }
-  return c.json(await createRoom(slug));
+
+  const body = await c.req.json<{ playerId?: string; displayName?: string }>().catch(() => ({}) as Record<string, never>);
+  if (!body.playerId || !body.displayName) {
+    return c.json({ error: "playerId and displayName are required" }, 400);
+  }
+
+  try {
+    return c.json(await createRoom(slug, body.playerId, body.displayName));
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 409);
+  }
 });
 
 // Public room browser — only for created-policy games that don't use a joinCode.
@@ -67,17 +77,18 @@ app.post("/rooms/:slug/join", async (c) => {
     return c.json({ error: `game "${slug}" does not use 'created' policy` }, 400);
   }
 
-  const body = await c.req.json<{ joinCode?: string; roomId?: string }>();
+  const body = await c.req.json<{ joinCode?: string; roomId?: string; playerId?: string }>();
+  if (!body.playerId) return c.json({ error: "playerId is required" }, 400);
 
   try {
     if (config.joinCode) {
       if (!body.joinCode) return c.json({ error: "joinCode is required" }, 400);
-      return c.json(await joinRoomByCode(slug, body.joinCode));
+      return c.json(await joinRoomByCode(slug, body.joinCode, body.playerId));
     }
     if (!body.roomId) return c.json({ error: "roomId is required" }, 400);
-    return c.json(await joinRoomById(slug, body.roomId));
+    return c.json(await joinRoomById(slug, body.roomId, body.playerId));
   } catch (err) {
-    return c.json({ error: (err as Error).message }, 404);
+    return c.json({ error: (err as Error).message }, 409);
   }
 });
 

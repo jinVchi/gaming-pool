@@ -5,6 +5,19 @@
 // Identical to unity/snake's copy — each Unity project is self-contained
 // (AGENTS.md: "one Unity project per game"), so this is duplicated, not shared.
 mergeInto(LibraryManager.library, {
+  // Identity is resolved by the web shell (Better Auth user or persisted
+  // guest) and exposed on window.__gamingPoolPlayer by UnityLoader.tsx before
+  // the build boots. Returns a JSON string, or "" when unset (e.g. the build
+  // is opened outside the web shell).
+  GPGetPlayerIdentity: function () {
+    var identity = window.__gamingPoolPlayer;
+    var json = identity ? JSON.stringify(identity) : "";
+    var size = lengthBytesUTF8(json) + 1;
+    var buffer = _malloc(size);
+    stringToUTF8(json, buffer, size);
+    return buffer;
+  },
+
   WSConnect: function (urlPtr, gameObjectNamePtr) {
     var url = UTF8ToString(urlPtr);
     var gameObjectName = UTF8ToString(gameObjectNamePtr);

@@ -4,6 +4,10 @@ using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.UI;
 
+#if UNITY_WEBGL && !UNITY_EDITOR
+using System.Runtime.InteropServices;
+#endif
+
 namespace GamingPool.Chess
 {
     public enum ClientState { Browsing, Connecting, Waiting, Playing, GameOver }
@@ -33,10 +37,41 @@ namespace GamingPool.Chess
 
         public ClientState State { get; private set; } = ClientState.Browsing;
 
+#if UNITY_WEBGL && !UNITY_EDITOR
+        [DllImport("__Internal")] private static extern string GPGetPlayerIdentity();
+#endif
+
+        // The web shell owns identity (Better Auth user or persisted guest) and
+        // exposes it via window.__gamingPoolPlayer; a random fallback only
+        // applies outside the browser (Editor play mode / standalone).
+        private void ResolveIdentity()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            try
+            {
+                var json = GPGetPlayerIdentity();
+                if (!string.IsNullOrEmpty(json))
+                {
+                    var identity = JObject.Parse(json);
+                    _playerId = identity["playerId"]?.ToString();
+                    _displayName = identity["displayName"]?.ToString();
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"Failed to read player identity from web shell: {e.Message}");
+            }
+#endif
+            if (string.IsNullOrEmpty(_playerId))
+            {
+                _playerId = Guid.NewGuid().ToString("N");
+                _displayName = $"Player-{_playerId.Substring(0, 4)}";
+            }
+        }
+
         private void Start()
         {
-            _playerId = Guid.NewGuid().ToString("N");
-            _displayName = $"Player-{_playerId.Substring(0, 4)}";
+            ResolveIdentity();
 
             networkClient.OnOpen += () => SetStatus(null);
             networkClient.OnMessage += HandleMessage;
@@ -66,7 +101,7 @@ namespace GamingPool.Chess
         private void HandleCreateRoom()
         {
             SetStatus("Creating room...");
-            apiClient.CreateRoom(ConnectToRoom, (error) => SetStatus($"Failed to create room: {error}"));
+            apiClient.CreateRoom(_playerId, _displayName, ConnectToRoom, (error) => SetStatus($"Failed to create room: {error}"));
         }
 
         private void HandleJoinRoom(string roomId)
@@ -74,6 +109,7 @@ namespace GamingPool.Chess
             SetStatus("Joining room...");
             apiClient.JoinRoom(
                 roomId,
+                _playerId,
                 ConnectToRoom,
                 (error) =>
                 {

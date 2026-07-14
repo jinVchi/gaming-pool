@@ -14,16 +14,30 @@ declare global {
       canvas: HTMLCanvasElement,
       config: Record<string, unknown>,
     ) => Promise<UnityInstance>;
+    __gamingPoolPlayer?: { playerId: string; displayName: string };
   }
 }
 
-export function UnityLoader({ slug }: { slug: string }) {
+export function UnityLoader({
+  slug,
+  playerId,
+  displayName,
+}: {
+  slug: string;
+  playerId: string;
+  displayName: string;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let unityInstance: UnityInstance | null = null;
     let cancelled = false;
+
+    // Unity reads this through the WebGL jslib bridge (GPGetPlayerIdentity)
+    // instead of inventing its own identity — must be set before the build
+    // boots.
+    window.__gamingPoolPlayer = { playerId, displayName };
 
     // Unity's WebGL output names the sub-files after the build's output folder
     // and nests them in a Build/ subfolder. Convention: each game is built into
@@ -61,7 +75,7 @@ export function UnityLoader({ slug }: { slug: string }) {
       document.body.removeChild(script);
       void unityInstance?.Quit();
     };
-  }, [slug]);
+  }, [slug, playerId, displayName]);
 
   if (error) {
     return <p className="game-status" role="alert">{error}</p>;

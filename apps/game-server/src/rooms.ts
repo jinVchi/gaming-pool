@@ -5,6 +5,7 @@ import {
   roomsKey,
   roomCodeKey,
   roomListKey,
+  playerRoomKey,
   gameConfigs,
 } from "@gaming-pool/shared";
 import type { Player } from "@gaming-pool/shared";
@@ -86,14 +87,33 @@ async function createRoom(roomId: string): Promise<RoomInstance | null> {
     }, TICK_INTERVAL_MS),
   };
 
+  // Matchmaking creates room/roomcode keys with a pending TTL so rooms whose
+  // host never connects expire; the room is live now, so make them permanent.
+  void redis.persist(roomKey(roomId));
+  if (room.joinCode) void redis.persist(roomCodeKey(room.joinCode));
+
   rooms.set(roomId, room);
   console.log(`[room ${roomId}] created (game=${room.slug}, policy=${room.isAuto ? "auto" : "created"}, maxPlayers=${room.maxPlayers})`);
   return room;
 }
 
+// roomId of a live room the player is currently connected to (or has a pending
+// host reservation for), pruning the pointer if that room no longer exists.
+export async function playerActiveRoom(playerId: string): Promise<string | null> {
+  const roomId = await redis.get(playerRoomKey(playerId));
+  if (!roomId) return null;
+  if (await redis.exists(roomKey(roomId))) return roomId;
+  await redis.del(playerRoomKey(playerId));
+  return null;
+}
+
 export function addPlayer(room: RoomInstance, player: Player, socket: WebSocket): void {
   room.players.set(player.id, socket);
   room.emptySince = null;
+
+  // Mark the player as busy in this room (replaces the host's pending-TTL
+  // reservation with a persistent pointer) — one active game per player.
+  void redis.set(playerRoomKey(player.id), room.roomId);
 
   try {
     room.module.onJoin(room.state, player);
@@ -134,6 +154,12 @@ export function handleMessage(room: RoomInstance, playerId: string, raw: string)
 
 export function removePlayer(room: RoomInstance, playerId: string): void {
   room.players.delete(playerId);
+
+  // Free the player for new rooms — but only if the pointer is still ours
+  // (they may already be reserved into another room).
+  void redis.get(playerRoomKey(playerId)).then((value) => {
+    if (value === room.roomId) return redis.del(playerRoomKey(playerId));
+  });
 
   try {
     room.module.onLeave(room.state, playerId);
