@@ -64,7 +64,7 @@ unity/            # Unity projects (one per game); WebGL builds output here (git
 
 ## Conventions
 - TypeScript strict mode everywhere. Shared message protocol types live in `packages/shared` — never duplicate them.
-- TypeScript versions are intentionally split: all workspaces use TS 7 (native compiler) **except `apps/web`, which stays on 5.x** — Next.js loads `next.config.ts` via TypeScript's programmatic API, which TS 7.0 doesn't ship (`Cannot read properties of undefined (reading 'fileExists')`). Revisit once TS 7.1 (stable programmatic API, ~Oct 2026) is out and Next supports it.
+- TypeScript versions are intentionally split: all workspaces use TS 7 (native compiler) **except `apps/web`, which stays on TS 6 (the JS-based bridge compiler)** — Next.js loads `next.config.ts` via TypeScript's programmatic API, which TS 7.0 doesn't ship (`Cannot read properties of undefined (reading 'fileExists')`). Move web to 7 once TS 7.1 (stable programmatic API, ~Oct 2026) is out and Next supports it.
 - **Internal relative imports are extensionless** (`from "./schema"`, never `"./schema.js"`). `.js`-suffixed imports break drizzle-kit's config loader and Next.js's webpack resolver. All tsconfigs use `moduleResolution: "Bundler"`.
 - Drizzle for all DB access; migrations in `packages/db`. Better Auth owns the identity tables (`user`, `session`, `account`, `verification` — regenerate via its CLI, don't hand-edit `auth-schema.ts`); game tables (`scores`, `ratings`) reference `user.id`.
 - Prefer English identifiers/comments.
