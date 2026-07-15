@@ -4,21 +4,17 @@ import type { GameSlug, RoomAssignment } from "@gaming-pool/shared";
 
 const redis = createRedisClient();
 
-// Single game-server in dev; a region->address map replaces this in production.
+// Dev default; production maps region → address.
 const GAME_SERVER_ADDR = process.env.GAME_SERVER_ADDR ?? "ws://localhost:5000";
 
 function generateJoinCode(): string {
   return randomBytes(3).toString("hex").toUpperCase();
 }
 
-// A freshly created room only becomes "real" once the host's WebSocket reaches
-// the game-server (which persists these keys). Until then both the room hash
-// and the host's playerroom reservation carry this TTL so a host who never
-// connects doesn't leak a room or stay locked out of creating another.
+// TTL until host WebSocket joins and persists keys.
 const PENDING_ROOM_TTL_S = 120;
 
-// roomId of a live room the player is already hosting/playing in, or null.
-// Prunes the pointer when the room it references no longer exists.
+// Player's current room, or null (drops stale pointers).
 async function activeRoomFor(playerId: string): Promise<string | null> {
   const roomId = await redis.get(playerRoomKey(playerId));
   if (!roomId) return null;
@@ -52,9 +48,7 @@ export async function assignAutoRoom(slug: GameSlug): Promise<RoomAssignment> {
   return { server: GAME_SERVER_ADDR, roomId };
 }
 
-// created policy branches on config.joinCode: code-based rooms (e.g. beatemup)
-// are private and shared out-of-band; rooms without a code are publicly listed
-// (e.g. chess) via roomListKey so other players can browse and join directly.
+// Create a created-policy room; reserves one-room-per-player (NX + TTL).
 export async function createRoom(
   slug: GameSlug,
   playerId: string,
@@ -70,8 +64,7 @@ export async function createRoom(
   }
 
   const roomId = randomUUID();
-  // NX makes the one-room-per-player check atomic against a double-click /
-  // second tab racing this request.
+  // Atomic one-room-per-player claim.
   const reserved = await redis.set(playerRoomKey(playerId), roomId, "EX", PENDING_ROOM_TTL_S, "NX");
   if (!reserved) {
     throw new Error("you already have an active room or game — finish or leave it first");
@@ -85,6 +78,7 @@ export async function createRoom(
     hostName: displayName,
   };
 
+  // For private rooms, generate a join code.
   let joinCode: string | undefined;
   if (config.joinCode) {
     joinCode = generateJoinCode();
@@ -103,8 +97,7 @@ export async function createRoom(
   return { server: GAME_SERVER_ADDR, roomId, ...(joinCode ? { joinCode } : {}) };
 }
 
-// Rejects joining any room while the player is already hosting or playing one
-// — including their own freshly created room from a second tab.
+// Reject join if player already has an active room.
 async function assertNotInGame(playerId: string, targetRoomId: string): Promise<void> {
   const active = await activeRoomFor(playerId);
   if (!active) return;
@@ -158,7 +151,7 @@ export async function listOpenRooms(slug: GameSlug): Promise<OpenRoom[]> {
   for (const roomId of roomIds) {
     const room = await redis.hgetall(roomKey(roomId));
     if (!room.game) {
-      void redis.srem(roomListKey(slug), roomId); // stale pointer — room already gone
+      void redis.srem(roomListKey(slug), roomId); // stale list entry
       continue;
     }
     rooms.push({

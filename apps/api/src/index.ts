@@ -7,8 +7,7 @@ import { assignAutoRoom, createRoom, joinRoomByCode, joinRoomById, listOpenRooms
 
 const app = new Hono();
 
-// The Unity WebGL client (served from apps/web) calls matchmaking cross-origin.
-// WEB_ORIGIN is a comma-separated allowlist; defaults to the local web dev server.
+// WEB_ORIGIN is a comma-separated CORS allowlist (default: local web).
 const allowedOrigins = (process.env.WEB_ORIGIN ?? "http://localhost:3000")
   .split(",")
   .map((o) => o.trim());
@@ -23,11 +22,13 @@ app.use(
   }),
 );
 
+// Liveness probe.
 app.get("/health", (c) => c.json({ ok: true }));
 
+// Better Auth session/login handlers.
 app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
-// Matchmaking: assigns { server, roomId } for a game slug. Never proxies game traffic.
+// Auto-policy matchmaking → { server, roomId }.
 app.post("/matchmake/:slug", async (c) => {
   const slug = c.req.param("slug");
   const config = gameConfigs[slug];
@@ -39,8 +40,7 @@ app.post("/matchmake/:slug", async (c) => {
   return c.json({ error: `game "${slug}" uses 'created' policy — use POST /rooms/:slug` }, 400);
 });
 
-// created policy: host creates a room. Games configured with joinCode:true
-// share a private code out-of-band; others are publicly listed for browsing.
+// Create a created-policy room (host).
 app.post("/rooms/:slug", async (c) => {
   const slug = c.req.param("slug");
   const config = gameConfigs[slug];
@@ -60,7 +60,7 @@ app.post("/rooms/:slug", async (c) => {
   }
 });
 
-// Public room browser — only for created-policy games that don't use a joinCode.
+// List publicly joinable created-policy rooms.
 app.get("/rooms/:slug", async (c) => {
   const slug = c.req.param("slug");
   const config = gameConfigs[slug];
@@ -70,6 +70,7 @@ app.get("/rooms/:slug", async (c) => {
   return c.json(await listOpenRooms(slug));
 });
 
+// Join a created-policy room by roomId or joinCode.
 app.post("/rooms/:slug/join", async (c) => {
   const slug = c.req.param("slug");
   const config = gameConfigs[slug];
