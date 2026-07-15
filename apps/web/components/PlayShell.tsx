@@ -49,7 +49,7 @@ export function PlayShell({ slug }: { slug: string }) {
 
   if (!started) {
     return (
-      <div>
+      <div className="play-shell">
         <button type="button" className="play-button" onClick={handlePlay} disabled={isPending}>
           Play
         </button>
@@ -66,5 +66,9 @@ export function PlayShell({ slug }: { slug: string }) {
     ? { playerId: session.user.id, displayName: session.user.name || "Player" }
     : getGuestIdentity();
 
-  return <UnityLoader slug={slug} playerId={identity.playerId} displayName={identity.displayName} />;
+  return (
+    <div className="play-shell">
+      <UnityLoader slug={slug} playerId={identity.playerId} displayName={identity.displayName} />
+    </div>
+  );
 }

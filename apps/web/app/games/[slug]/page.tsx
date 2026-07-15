@@ -45,6 +45,7 @@ export default async function GamePage({ params }: GamePageParams) {
       <a href="/" className="back-link">
         ← Back to lobby
       </a>
+      <PlayShell slug={slug} />
       <h1>{content.title}</h1>
       <p>{content.description}</p>
       <section>
@@ -55,7 +56,6 @@ export default async function GamePage({ params }: GamePageParams) {
           ))}
         </ol>
       </section>
-      <PlayShell slug={slug} />
       <script
         type="application/ld+json"
         // eslint-disable-next-line react/no-danger
