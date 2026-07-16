@@ -34,6 +34,7 @@ interface RoomInstance {
 const rooms = new Map<string, RoomInstance>();
 const pendingCreations = new Map<string, Promise<RoomInstance | null>>();
 
+// Return existing room, share in-flight create, or start one.
 export async function getOrCreateRoom(roomId: string): Promise<RoomInstance | null> {
   const existing = rooms.get(roomId);
   if (existing) return existing;
@@ -47,6 +48,7 @@ export async function getOrCreateRoom(roomId: string): Promise<RoomInstance | nu
 }
 
 async function createRoom(roomId: string): Promise<RoomInstance | null> {
+  // Load Redis meta + game module.
   const meta = await redis.hgetall(roomKey(roomId));
   if (!meta.game) return null;
 
@@ -56,6 +58,7 @@ async function createRoom(roomId: string): Promise<RoomInstance | null> {
   const config = gameConfigs[meta.game];
   const players = new Map<string, WebSocket>();
 
+  // Wire send/broadcast for the game module.
   const ctx: RoomContext = {
     broadcast(message) {
       const payload = JSON.stringify(message);
@@ -68,6 +71,7 @@ async function createRoom(roomId: string): Promise<RoomInstance | null> {
 
   const state = module.createState(roomId, ctx);
 
+  // Build room + start tick loop.
   const room: RoomInstance = {
     roomId,
     slug: meta.game,
@@ -87,8 +91,7 @@ async function createRoom(roomId: string): Promise<RoomInstance | null> {
     }, TICK_INTERVAL_MS),
   };
 
-  // Matchmaking creates room/roomcode keys with a pending TTL so rooms whose
-  // host never connects expire; the room is live now, so make them permanent.
+  // Drop pending TTLs — room is live.
   void redis.persist(roomKey(roomId));
   if (room.joinCode) void redis.persist(roomCodeKey(room.joinCode));
 
@@ -97,8 +100,7 @@ async function createRoom(roomId: string): Promise<RoomInstance | null> {
   return room;
 }
 
-// roomId of a live room the player is currently connected to (or has a pending
-// host reservation for), pruning the pointer if that room no longer exists.
+// Player's current room, or null (drops stale pointers).
 export async function playerActiveRoom(playerId: string): Promise<string | null> {
   const roomId = await redis.get(playerRoomKey(playerId));
   if (!roomId) return null;
@@ -108,11 +110,11 @@ export async function playerActiveRoom(playerId: string): Promise<string | null>
 }
 
 export function addPlayer(room: RoomInstance, player: Player, socket: WebSocket): void {
+  // Attach socket + clear empty timer.
   room.players.set(player.id, socket);
   room.emptySince = null;
 
-  // Mark the player as busy in this room (replaces the host's pending-TTL
-  // reservation with a persistent pointer) — one active game per player.
+  // Persist one-room-per-player pointer.
   void redis.set(playerRoomKey(player.id), room.roomId);
 
   try {
@@ -121,12 +123,10 @@ export function addPlayer(room: RoomInstance, player: Player, socket: WebSocket)
     console.error(`[room ${room.roomId}] onJoin error:`, err);
   }
 
+  // Update Redis room registry / public list.
   if (room.isAuto) {
     void redis.zincrby(roomsKey(room.slug), 1, room.roomId);
   } else {
-    // Generic bookkeeping for `created`-policy rooms (public listing, e.g.
-    // chess): the room-server — not any individual game module — owns this,
-    // so it applies to every created-policy game without per-game code.
     const update: Record<string, string | number> = { playerCount: room.players.size };
     if (room.players.size === 1) update.hostName = player.displayName;
     void redis.hset(roomKey(room.roomId), update);
@@ -155,8 +155,7 @@ export function handleMessage(room: RoomInstance, playerId: string, raw: string)
 export function removePlayer(room: RoomInstance, playerId: string): void {
   room.players.delete(playerId);
 
-  // Free the player for new rooms — but only if the pointer is still ours
-  // (they may already be reserved into another room).
+  // Free playerroom if still this room.
   void redis.get(playerRoomKey(playerId)).then((value) => {
     if (value === room.roomId) return redis.del(playerRoomKey(playerId));
   });
@@ -167,12 +166,11 @@ export function removePlayer(room: RoomInstance, playerId: string): void {
     console.error(`[room ${room.roomId}] onLeave error:`, err);
   }
 
+  // Update Redis counts / relist if a seat opened.
   if (room.isAuto) {
     void redis.zincrby(roomsKey(room.slug), -1, room.roomId);
   } else if (room.players.size > 0) {
     void redis.hset(roomKey(room.roomId), { playerCount: room.players.size });
-    // Re-open the seat in public listing (code-based rooms are never listed,
-    // so never re-add them here).
     if (!room.joinCode && room.players.size < room.maxPlayers) {
       void redis.sadd(roomListKey(room.slug), room.roomId);
     }
@@ -180,6 +178,7 @@ export function removePlayer(room: RoomInstance, playerId: string): void {
 
   console.log(`[room ${room.roomId}] ${playerId} left (${room.players.size}/${room.maxPlayers})`);
 
+  // Empty created rooms die now; auto rooms wait for TTL sweep.
   if (room.players.size === 0) {
     room.emptySince = Date.now();
     if (!room.isAuto) {
@@ -189,6 +188,7 @@ export function removePlayer(room: RoomInstance, playerId: string): void {
 }
 
 async function destroyRoom(room: RoomInstance, reason: string): Promise<void> {
+  // Stop tick, drop memory + Redis keys.
   clearInterval(room.tickHandle);
   rooms.delete(room.roomId);
 
@@ -202,8 +202,7 @@ async function destroyRoom(room: RoomInstance, reason: string): Promise<void> {
   console.log(`[room ${room.roomId}] closed (${reason})`);
 }
 
-// Rolling `auto` rooms are destroyed after sitting empty past the TTL; `created`
-// rooms are destroyed immediately on empty (see removePlayer).
+// Sweep empty auto rooms past TTL.
 setInterval(() => {
   const now = Date.now();
   for (const room of rooms.values()) {

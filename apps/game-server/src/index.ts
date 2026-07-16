@@ -11,6 +11,7 @@ const wss = new WebSocketServer({ port, perMessageDeflate: false });
 const alive = new WeakMap<WebSocket, boolean>();
 
 wss.on("connection", async (socket, req) => {
+  // Parse query params.
   const url = new URL(req.url ?? "", "http://localhost");
   const roomId = url.searchParams.get("roomId");
   const playerId = url.searchParams.get("playerId") ?? randomUUID();
@@ -21,6 +22,7 @@ wss.on("connection", async (socket, req) => {
     return;
   }
 
+  // Load or create the in-memory room.
   const room = await getOrCreateRoom(roomId);
   if (!room) {
     socket.close(4004, "room not found");
@@ -31,8 +33,7 @@ wss.on("connection", async (socket, req) => {
     return;
   }
 
-  // One live connection per player: reject a second tab into the same room
-  // and reject connecting while busy in a different room.
+  // One connection / one room per player.
   if (room.players.has(playerId)) {
     socket.close(4005, "already connected to this room");
     return;
@@ -43,6 +44,7 @@ wss.on("connection", async (socket, req) => {
     return;
   }
 
+  // Join + heartbeat tracking.
   addPlayer(room, { id: playerId, displayName }, socket);
   alive.set(socket, true);
 
@@ -51,6 +53,7 @@ wss.on("connection", async (socket, req) => {
   socket.on("close", () => removePlayer(room, playerId));
 });
 
+// Terminate dead sockets.
 const heartbeat = setInterval(() => {
   for (const socket of wss.clients) {
     if (alive.get(socket) === false) {
