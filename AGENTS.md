@@ -68,7 +68,7 @@ unity/            # Unity projects (one per game); WebGL builds output here (git
 - TypeScript versions are intentionally split: all workspaces use TS 7 (native compiler) **except `apps/web`, which stays on TS 6 (the JS-based bridge compiler)** — Next.js loads `next.config.ts` via TypeScript's programmatic API, which TS 7.0 doesn't ship (`Cannot read properties of undefined (reading 'fileExists')`). Move web to 7 once TS 7.1 (stable programmatic API, ~Oct 2026) is out and Next supports it.
 - **Internal relative imports are extensionless** (`from "./schema"`, never `"./schema.js"`). `.js`-suffixed imports break drizzle-kit's config loader and Next.js's webpack resolver. All tsconfigs use `moduleResolution: "Bundler"`.
 - Drizzle for all DB access; migrations in `packages/db`. Better Auth owns the identity tables (`user`, `session`, `account`, `verification` — regenerate via its CLI, don't hand-edit `auth-schema.ts`); game tables (`scores`, `ratings`) reference `user.id`.
-- Prefer English identifiers/comments.
+- Add comments on functions and main steps in functions.Use concise words in comments. 
 - Keep answers to "should this hit Postgres?" biased toward **no** — check if Redis or in-memory state suffices first.
 - Unity C# in `unity/*/Assets` mirrors the server wire protocol via Newtonsoft.Json DTOs (`Models.cs`) — when a module's protocol changes, update the matching DTOs. Each Unity project is self-contained (the WebSocket `.jslib` bridge + `NetworkClient.cs` are intentionally duplicated per project).
 - Modifiy this agents.md when necessary.
