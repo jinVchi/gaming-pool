@@ -45,7 +45,7 @@ unity/            # Unity projects (one per game); WebGL builds output here (git
   ```
   - `auto`: allocate player to fullest non-full room in their region; create room if none. Rooms are rolling.
   - `created` + `joinCode: true`: player creates a private room, shares the code out-of-band (`POST /rooms/:slug/join` with `joinCode`).
-  - `created` without `joinCode`: room is publicly listed (`GET /rooms/:slug` → open rooms with hostName/playerCount) and joined by `roomId`. The room server maintains list membership generically (delist when full, relist when a seat opens).
+  - `created` without `joinCode`: room is publicly listed (`GET /rooms/:slug` → open rooms with hostName/playerCount) and joined by `roomId`. The room server owns list membership generically: listed when the creator's socket joins (never at API create time, so a stranger can't take over the room before its creator connects), delisted when full, relisted when a seat opens.
 - Adding a new game must NOT require changes to matchmaking internals, the game server host loop, or the web shell — only: a game logic module + registration in `packages/games/src/registry.ts`, a config entry in `packages/shared/src/game-config.ts`, SEO content in `apps/web/lib/game-content.ts`, and a Unity build. All three registries are keyed by the same slug.
 - Each room runs its own tick loop; game logic modules expose a common interface: `createState(roomId, ctx)`, `onJoin`, `onLeave`, `onMessage`, `tick`. The `ctx` (RoomContext) provides `broadcast`/`send` — modules never touch sockets directly.
 - Server logic is authoritative; Unity clients are renderers + input devices. For rules-heavy games prefer an established library over hand-rolling (chess uses `chess.js`).

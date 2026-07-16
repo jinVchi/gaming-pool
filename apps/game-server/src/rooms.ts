@@ -130,8 +130,14 @@ export function addPlayer(room: RoomInstance, player: Player, socket: WebSocket)
     const update: Record<string, string | number> = { playerCount: room.players.size };
     if (room.players.size === 1) update.hostName = player.displayName;
     void redis.hset(roomKey(room.roomId), update);
-    if (room.players.size >= room.maxPlayers) {
-      void redis.srem(roomListKey(room.slug), room.roomId);
+    // The room server owns roomlist membership: listed from the host's join
+    // (matchmaking never lists pending rooms) while a seat is open.
+    if (!room.joinCode) {
+      if (room.players.size >= room.maxPlayers) {
+        void redis.srem(roomListKey(room.slug), room.roomId);
+      } else {
+        void redis.sadd(roomListKey(room.slug), room.roomId);
+      }
     }
   }
 

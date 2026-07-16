@@ -26,8 +26,10 @@ export function playerRoomKey(playerId: string): string {
 }
 
 // Public listing of joinable `created`-policy rooms that don't use a joinCode
-// (e.g. chess) — a room is a member while it has an open seat, removed once
-// full or destroyed. `beatemup`-style code-based rooms never appear here.
+// (e.g. chess) — a room is a member from the moment its creator's socket joins
+// (not from API creation, so a stranger can't beat the creator into the room)
+// while it has an open seat; removed once full or destroyed. `beatemup`-style
+// code-based rooms never appear here.
 export function roomListKey(game: GameSlug): string {
   return `roomlist:${game}`;
 }

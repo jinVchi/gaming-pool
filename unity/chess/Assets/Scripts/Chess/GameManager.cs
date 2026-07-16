@@ -170,6 +170,7 @@ namespace GamingPool.Chess
             State = ClientState.Waiting;
             waitingRoom.gameObject.SetActive(true);
             board.gameObject.SetActive(false);
+            gameOverPanel.SetActive(false);
             waitingRoom.Render(lobby, _playerId);
         }
 
@@ -179,6 +180,7 @@ namespace GamingPool.Chess
             _localColor = started.White == _playerId ? "w" : "b";
             waitingRoom.gameObject.SetActive(false);
             board.gameObject.SetActive(true);
+            gameOverPanel.SetActive(false);
             board.Initialize(started.Fen, _localColor);
             SetStatus(started.Turn == _localColor ? "Your turn" : "Opponent's turn");
         }

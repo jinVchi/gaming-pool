@@ -33,9 +33,14 @@ export async function assignAutoRoom(slug: GameSlug): Promise<RoomAssignment> {
   for (let i = 0; i < candidates.length; i += 2) {
     const roomId = candidates[i]!;
     const playerCount = Number(candidates[i + 1]);
-    if (playerCount < config.maxPlayers) {
-      return { server: GAME_SERVER_ADDR, roomId };
+    if (playerCount >= config.maxPlayers) continue;
+    // Pending room whose hash TTL expired (assigned player never connected) —
+    // drop the stale registry entry instead of assigning a dead room.
+    if (!(await redis.exists(roomKey(roomId)))) {
+      await redis.zrem(roomsKey(slug), roomId);
+      continue;
     }
+    return { server: GAME_SERVER_ADDR, roomId };
   }
 
   const roomId = randomUUID();
@@ -44,6 +49,8 @@ export async function assignAutoRoom(slug: GameSlug): Promise<RoomAssignment> {
     game: slug,
     maxPlayers: config.maxPlayers,
   });
+  // Pending TTL like created rooms; the game server persists on spin-up.
+  await redis.expire(roomKey(roomId), PENDING_ROOM_TTL_S);
   await redis.zadd(roomsKey(slug), 0, roomId);
   return { server: GAME_SERVER_ADDR, roomId };
 }
@@ -90,9 +97,10 @@ export async function createRoom(
 
   if (joinCode) {
     await redis.set(roomCodeKey(joinCode), roomId, "EX", PENDING_ROOM_TTL_S);
-  } else {
-    await redis.sadd(roomListKey(slug), roomId);
   }
+  // Public (no-joinCode) rooms are NOT listed here: the game server adds them
+  // to roomlist:{slug} when the creator's socket joins. Listing earlier lets a
+  // stranger connect first and become the room owner in the creator's place.
 
   return { server: GAME_SERVER_ADDR, roomId, ...(joinCode ? { joinCode } : {}) };
 }

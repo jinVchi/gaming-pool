@@ -28,21 +28,26 @@ wss.on("connection", async (socket, req) => {
     socket.close(4004, "room not found");
     return;
   }
-  if (room.players.size >= room.maxPlayers) {
-    socket.close(4003, "room is full");
-    return;
-  }
-
-  // One connection / one room per player.
-  if (room.players.has(playerId)) {
-    socket.close(4005, "already connected to this room");
-    return;
-  }
   const activeRoom = await playerActiveRoom(playerId);
   if (activeRoom && activeRoom !== roomId) {
     socket.close(4005, "already in another game");
     return;
   }
+
+  // Seat checks must stay after the last await: two connections racing for
+  // the last seat interleave at the awaits above, so checking earlier lets
+  // both through and overfills the room.
+  if (room.players.has(playerId)) {
+    socket.close(4005, "already connected to this room");
+    return;
+  }
+  if (room.players.size >= room.maxPlayers) {
+    socket.close(4003, "room is full");
+    return;
+  }
+  // Client vanished during the awaits — its close event already fired, so
+  // joining now would leave a ghost player that removePlayer never reaps.
+  if (socket.readyState !== socket.OPEN) return;
 
   // Join + heartbeat tracking.
   addPlayer(room, { id: playerId, displayName }, socket);

@@ -33,6 +33,17 @@ function serializeLobby(state: ChessModuleState) {
   };
 }
 
+// Back to a joinable lobby: the room server relists created-policy rooms with
+// an open seat, so a room must never stay `started` after its game is over —
+// joiners would land in a dead game where ready/start no-op.
+function resetToLobby(state: ChessModuleState): void {
+  state.started = false;
+  state.chess = null;
+  state.white = null;
+  state.black = null;
+  for (const player of state.players.values()) player.ready = false;
+}
+
 function gameResult(chess: Chess): string | null {
   if (chess.isCheckmate()) return "checkmate";
   if (chess.isStalemate()) return "stalemate";
@@ -68,16 +79,19 @@ export const chessModule: GameModule<ChessModuleState> = {
   onLeave(state, playerId) {
     state.players.delete(playerId);
 
-    if (state.started && (playerId === state.white || playerId === state.black)) {
+    const abandoned = state.started && (playerId === state.white || playerId === state.black);
+    if (abandoned) {
       const winner = playerId === state.white ? state.black : state.white;
       state.ctx.broadcast({ type: "gameover", payload: { reason: "opponent_left", winner } });
-      return;
+      resetToLobby(state);
     }
 
     if (playerId === state.ownerId) {
       state.ownerId = [...state.players.keys()][0] ?? null;
     }
-    state.ctx.broadcast(serializeLobby(state));
+    // After a gameover, skip the lobby broadcast so the winner keeps seeing
+    // the result — the next join/leave broadcasts fresh lobby state anyway.
+    if (!abandoned) state.ctx.broadcast(serializeLobby(state));
   },
 
   onMessage(state, playerId, message) {
@@ -140,6 +154,7 @@ export const chessModule: GameModule<ChessModuleState> = {
       }
 
       state.ctx.broadcast(serializeMove(state.chess, from, to));
+      if (state.chess.isGameOver()) resetToLobby(state);
     }
   },
 
