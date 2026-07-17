@@ -56,6 +56,7 @@ unity/            # Unity projects (one per game); WebGL builds output here (git
 - On join/leave: update regional Redis room counts (auto policy) or playerCount/hostName/roomlist membership (created policy). This bookkeeping lives in the room server (`apps/game-server/src/rooms.ts`), never in game modules.
 - Rooms with `policy: auto` are rolling (players join mid-game); destroyed after 5 min empty. `created`-policy rooms are destroyed immediately when the last player leaves.
 - Clients connect with `?roomId=&playerId=&displayName=` query params; room metadata is resolved from Redis on first connection.
+- Crash recovery: on boot, before listening, the server sweeps Redis of persistent `room:` keys whose `server` field matches its own `GAME_SERVER_ADDR` (rooms live in a previous run, now orphans). Pending-TTL rooms are left to connect or expire; stale `playerroom:` pointers self-heal lazily.
 - Force full page load when leaving a game page (Unity WebGL memory is not reliably released on SPA navigation).
 
 ## Web app rules

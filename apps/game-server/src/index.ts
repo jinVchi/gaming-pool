@@ -9,10 +9,16 @@ import {
   playerActiveRoom,
   claimPlayerSeat,
   releasePlayerSeat,
+  sweepOrphanedRooms,
 } from "./rooms";
 
 const port = Number(process.env.PORT ?? 5000);
 const HEARTBEAT_INTERVAL_MS = 30_000;
+// Advertised address, must match what matchmaking hands out for this server.
+const serverAddr = process.env.GAME_SERVER_ADDR ?? `ws://localhost:${port}`;
+
+// Crash recovery: reclaim Redis from a previous run before accepting connections.
+await sweepOrphanedRooms(serverAddr);
 
 // One process hosts many rooms across multiple games; game logic loaded from packages/games.
 const wss = new WebSocketServer({ port, perMessageDeflate: false });

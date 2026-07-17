@@ -39,6 +39,35 @@ interface RoomInstance {
 const rooms = new Map<string, RoomInstance>();
 const pendingCreations = new Map<string, Promise<RoomInstance | null>>();
 
+// Boot sweep: delete rooms this server owned in a previous (crashed) run.
+// Persistent room keys (TTL -1) were live on the dead process and are now
+// orphans; pending-TTL keys are in-flight matchmaking assignments — left
+// alone to connect (getOrCreateRoom rebuilds from meta) or expire. Stale
+// playerroom pointers self-heal via the existing room-gone cleanup.
+export async function sweepOrphanedRooms(serverAddr: string): Promise<void> {
+  let cursor = "0";
+  let removed = 0;
+  do {
+    const [next, keys] = await redis.scan(cursor, "MATCH", roomKey("*"), "COUNT", 100);
+    cursor = next;
+    for (const key of keys) {
+      const [meta, ttl] = await Promise.all([redis.hgetall(key), redis.ttl(key)]);
+      if (meta.server !== serverAddr || ttl !== -1) continue;
+      const roomId = key.slice(roomKey("").length);
+      const pipeline = redis.pipeline();
+      pipeline.del(key);
+      if (meta.game) {
+        pipeline.zrem(roomsKey(meta.game), roomId);
+        pipeline.srem(roomListKey(meta.game), roomId);
+      }
+      if (meta.joinCode) pipeline.del(roomCodeKey(meta.joinCode));
+      await pipeline.exec();
+      removed++;
+    }
+  } while (cursor !== "0");
+  if (removed > 0) console.log(`[sweep] removed ${removed} orphaned room(s) from a previous run`);
+}
+
 // Return existing room, share in-flight create, or start one.
 export async function getOrCreateRoom(roomId: string): Promise<RoomInstance | null> {
   const existing = rooms.get(roomId);
