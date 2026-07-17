@@ -1,5 +1,5 @@
 import { randomUUID, randomBytes } from "node:crypto";
-import { createRedisClient, roomKey, roomsKey, roomCodeKey, roomListKey, playerRoomKey, gameConfigs } from "@gaming-pool/shared";
+import { createRedisClient, roomKey, roomsKey, roomCodeKey, roomListKey, playerRoomKey, claimPlayerRoom, releasePlayerRoom, gameConfigs } from "@gaming-pool/shared";
 import type { GameSlug, RoomAssignment } from "@gaming-pool/shared";
 
 const redis = createRedisClient();
@@ -14,15 +14,20 @@ function generateJoinCode(): string {
 // TTL until host WebSocket joins and persists keys.
 const PENDING_ROOM_TTL_S = 120;
 
-// Player's current room, or null (drops stale pointers).
+// Check if the player has an active room.
 async function activeRoomFor(playerId: string): Promise<string | null> {
+  // playerRoomKey exists?
   const roomId = await redis.get(playerRoomKey(playerId));
   if (!roomId) return null;
+  // roomKey exists?
   if (await redis.exists(roomKey(roomId))) return roomId;
-  await redis.del(playerRoomKey(playerId));
+  // Stale pointer (room gone) — compare-and-delete so a concurrent claim of a
+  // newer room can't be wiped by this cleanup.
+  await releasePlayerRoom(redis, playerId, roomId);
+  // No active room
   return null;
 }
-
+// Assign an auto room to the player.
 export async function assignAutoRoom(slug: GameSlug): Promise<RoomAssignment> {
   const config = gameConfigs[slug];
   if (!config || config.policy !== "auto") {
@@ -105,6 +110,16 @@ export async function createRoom(
   return { server: GAME_SERVER_ADDR, roomId, ...(joinCode ? { joinCode } : {}) };
 }
 
+// Atomic pending claim of playerroom for a join — closes the check-then-act
+// race where two concurrent join requests from one player both pass
+// assertNotInGame (the pointer used to be written only when the socket joined).
+async function reservePlayerRoom(playerId: string, roomId: string): Promise<void> {
+  const reserved = await claimPlayerRoom(redis, playerId, roomId, PENDING_ROOM_TTL_S);
+  if (!reserved) {
+    throw new Error("you already have an active room or game — finish or leave it first");
+  }
+}
+
 // Reject join if player already has an active room.
 async function assertNotInGame(playerId: string, targetRoomId: string): Promise<void> {
   const active = await activeRoomFor(playerId);
@@ -126,6 +141,7 @@ export async function joinRoomByCode(slug: GameSlug, joinCode: string, playerId:
     throw new Error(`join code "${joinCode}" does not belong to game "${slug}"`);
   }
   await assertNotInGame(playerId, roomId);
+  await reservePlayerRoom(playerId, roomId);
   return { server: room.server!, roomId };
 }
 
@@ -143,6 +159,7 @@ export async function joinRoomById(slug: GameSlug, roomId: string, playerId: str
     throw new Error(`room "${roomId}" is full`);
   }
   await assertNotInGame(playerId, roomId);
+  await reservePlayerRoom(playerId, roomId);
   return { server: room.server!, roomId };
 }
 

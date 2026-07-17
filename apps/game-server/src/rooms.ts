@@ -6,6 +6,8 @@ import {
   roomCodeKey,
   roomListKey,
   playerRoomKey,
+  claimPlayerRoom,
+  releasePlayerRoom,
   gameConfigs,
 } from "@gaming-pool/shared";
 import type { Player } from "@gaming-pool/shared";
@@ -15,6 +17,9 @@ import type { GameModule, RoomContext } from "@gaming-pool/games";
 const TICK_INTERVAL_MS = 50;
 const EMPTY_ROOM_TTL_MS = 5 * 60 * 1000;
 const EMPTY_ROOM_SWEEP_MS = 30 * 1000;
+// Grace for a created room that spun up but nobody ever joined (creator's
+// socket died before seating) — matches the API's pending-reservation TTL.
+const CREATED_ROOM_PENDING_MS = 2 * 60 * 1000;
 
 const redis = createRedisClient();
 
@@ -105,17 +110,29 @@ export async function playerActiveRoom(playerId: string): Promise<string | null>
   const roomId = await redis.get(playerRoomKey(playerId));
   if (!roomId) return null;
   if (await redis.exists(roomKey(roomId))) return roomId;
-  await redis.del(playerRoomKey(playerId));
+  // Compare-and-delete: don't wipe a pointer claimed for a newer room meanwhile.
+  await releasePlayerRoom(redis, playerId, roomId);
   return null;
 }
 
+// Persistent one-room-per-player claim, awaited by the connection handler
+// before seating — atomic, so two sockets racing to different rooms can't
+// both win. False = player already holds a different room.
+export function claimPlayerSeat(playerId: string, roomId: string): Promise<boolean> {
+  return claimPlayerRoom(redis, playerId, roomId);
+}
+
+// Undo a claim when the connection is rejected after claiming (room full,
+// socket died) — compare-and-delete, never touches a pointer to another room.
+export function releasePlayerSeat(playerId: string, roomId: string): Promise<void> {
+  return releasePlayerRoom(redis, playerId, roomId);
+}
+
 export function addPlayer(room: RoomInstance, player: Player, socket: WebSocket): void {
-  // Attach socket + clear empty timer.
+  // Attach socket + clear empty timer. playerroom was already claimed
+  // (awaited) by the connection handler.
   room.players.set(player.id, socket);
   room.emptySince = null;
-
-  // Persist one-room-per-player pointer.
-  void redis.set(playerRoomKey(player.id), room.roomId);
 
   try {
     room.module.onJoin(room.state, player);
@@ -161,9 +178,10 @@ export function handleMessage(room: RoomInstance, playerId: string, raw: string)
 export function removePlayer(room: RoomInstance, playerId: string): void {
   room.players.delete(playerId);
 
-  // Free playerroom if still this room.
-  void redis.get(playerRoomKey(playerId)).then((value) => {
-    if (value === room.roomId) return redis.del(playerRoomKey(playerId));
+  // Free playerroom if still this room (atomic compare-and-delete — the old
+  // GET-then-DEL could wipe a pointer to a room the player just moved to).
+  releasePlayerRoom(redis, playerId, room.roomId).catch((err) => {
+    console.error(`[room ${room.roomId}] failed to release playerroom for ${playerId}:`, err);
   });
 
   try {
@@ -208,12 +226,16 @@ async function destroyRoom(room: RoomInstance, reason: string): Promise<void> {
   console.log(`[room ${room.roomId}] closed (${reason})`);
 }
 
-// Sweep empty auto rooms past TTL.
+// Sweep empty rooms: auto rooms past their idle TTL, and created rooms that
+// spun up but were never joined (created rooms with players die immediately
+// on last leave, so only the never-joined ones reach this sweep).
 setInterval(() => {
   const now = Date.now();
   for (const room of rooms.values()) {
-    if (room.isAuto && room.emptySince && now - room.emptySince > EMPTY_ROOM_TTL_MS) {
-      void destroyRoom(room, "empty auto-policy room past TTL");
+    if (!room.emptySince) continue;
+    const limit = room.isAuto ? EMPTY_ROOM_TTL_MS : CREATED_ROOM_PENDING_MS;
+    if (now - room.emptySince > limit) {
+      void destroyRoom(room, room.isAuto ? "empty auto-policy room past TTL" : "created room never joined");
     }
   }
 }, EMPTY_ROOM_SWEEP_MS);
