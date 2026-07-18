@@ -13,6 +13,7 @@ import {
   assertGameRegistryConsistency,
   sweepOrphanedRooms,
 } from "./rooms";
+import { drainScores } from "./scores";
 
 const port = Number(process.env.PORT ?? 5000);
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -22,6 +23,9 @@ const MAX_BURST_MESSAGES = 120;
 const SUSTAINED_RATE_WINDOW_MS = 60_000;
 const MAX_SUSTAINED_MESSAGES = 1_200;
 const SOCKET_PROTOCOL = "gaming-pool";
+const SHUTDOWN_TIMEOUT_MS = 8_000;
+const SOCKET_CLOSE_GRACE_MS = 1_000;
+const SOCKET_TERMINATE_WAIT_MS = 250;
 const gameAuthSecret = getGameAuthSecret();
 // Advertised address, must match what matchmaking hands out for this server.
 const serverAddr = process.env.GAME_SERVER_ADDR ?? `ws://localhost:${port}`;
@@ -180,5 +184,53 @@ const heartbeat = setInterval(() => {
 }, HEARTBEAT_INTERVAL_MS);
 
 wss.on("close", () => clearInterval(heartbeat));
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+let shuttingDown = false;
+
+// Stop new sockets, reap current clients, then give queued scores the rest of
+// the shutdown budget. The hard timer guarantees deployment termination.
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] received ${signal}`);
+  clearInterval(heartbeat);
+  const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
+  const hardExit = setTimeout(() => {
+    console.error("[shutdown] deadline exceeded; forcing exit");
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+
+  const serverClosed = new Promise<void>((resolve) => {
+    wss.close((err) => {
+      if (err) console.error("[shutdown] WebSocket server close failed:", err);
+      resolve();
+    });
+  });
+  for (const socket of wss.clients) socket.close(1001, "server shutting down");
+  await Promise.race([serverClosed, wait(SOCKET_CLOSE_GRACE_MS)]);
+  for (const socket of wss.clients) socket.terminate();
+  await Promise.race([serverClosed, wait(SOCKET_TERMINATE_WAIT_MS)]);
+
+  const remainingMs = Math.max(0, deadline - Date.now());
+  const drained = await drainScores(remainingMs);
+  if (!drained) console.warn("[shutdown] score drain deadline reached; some scores were not persisted");
+
+  clearTimeout(hardExit);
+  process.exit(0);
+}
+
+function requestShutdown(signal: NodeJS.Signals): void {
+  void shutdown(signal).catch((err: unknown) => {
+    console.error("[shutdown] failed:", err);
+    process.exit(1);
+  });
+}
+
+process.once("SIGTERM", () => requestShutdown("SIGTERM"));
+process.once("SIGINT", () => requestShutdown("SIGINT"));
 
 console.log(`game-server listening on ws://localhost:${port}`);

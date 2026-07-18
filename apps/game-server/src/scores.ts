@@ -21,6 +21,13 @@ const queue: QueuedScore[] = [];
 let flushInFlight = false;
 let warnedMissingDatabase = false;
 let retryNotBefore = 0;
+let acceptingScores = true;
+let databasePromise: Promise<DatabaseModule> | null = null;
+
+function loadDatabase(): Promise<DatabaseModule> {
+  databasePromise ??= import("@gaming-pool/db");
+  return databasePromise;
+}
 
 function scoreValue(score: QueuedScore): PendingScore {
   return { userId: score.userId, gameSlug: score.gameSlug, score: score.score };
@@ -86,6 +93,7 @@ async function isolateInvalidScores(
 
 // Enqueue only validated integer scores; the room tick never waits on Postgres.
 export function enqueueScore(score: PendingScore): void {
+  if (!acceptingScores) return;
   if (!process.env.DATABASE_URL) {
     if (!warnedMissingDatabase) {
       warnedMissingDatabase = true;
@@ -107,13 +115,14 @@ export async function flushScores(): Promise<void> {
   if (flushInFlight || queue.length === 0 || !process.env.DATABASE_URL || Date.now() < retryNotBefore) return;
   flushInFlight = true;
   const batch = queue.splice(0, MAX_BATCH_SIZE);
+  let database: DatabaseModule | null = null;
   try {
-    const database = await import("@gaming-pool/db");
+    database = await loadDatabase();
     await database.db.insert(database.scores).values(batch.map(scoreValue));
     retryNotBefore = 0;
   } catch (err) {
-    if (isConstraintError(err)) {
-      const isolated = await isolateInvalidScores(await import("@gaming-pool/db"), batch);
+    if (database && isConstraintError(err)) {
+      const isolated = await isolateInvalidScores(database, batch);
       if (isolated.dropped > 0) {
         console.error(`[scores] dropped ${isolated.dropped} score(s) that violated database constraints`);
       }
@@ -129,3 +138,30 @@ export async function flushScores(): Promise<void> {
 
 const flushTimer = setInterval(() => void flushScores(), FLUSH_INTERVAL_MS);
 flushTimer.unref();
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+// Stop new writes and drain queued batches until empty or the deadline passes.
+export async function drainScores(timeoutMs: number): Promise<boolean> {
+  acceptingScores = false;
+  clearInterval(flushTimer);
+  retryNotBefore = 0;
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+
+  while ((queue.length > 0 || flushInFlight) && Date.now() < deadline) {
+    const remainingMs = deadline - Date.now();
+    if (!flushInFlight && Date.now() >= retryNotBefore) {
+      const completed = await Promise.race([
+        flushScores().then(() => true),
+        wait(remainingMs).then(() => false),
+      ]);
+      if (!completed) return false;
+      continue;
+    }
+    await wait(Math.min(50, remainingMs));
+  }
+
+  return queue.length === 0 && !flushInFlight;
+}

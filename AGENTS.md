@@ -57,6 +57,7 @@ unity/            # Unity projects (one per game); WebGL builds output here (git
 - Rooms with `policy: auto` are rolling (players join mid-game); destroyed after 5 min empty. `created`-policy rooms are destroyed immediately when the last player leaves.
 - Clients connect with `?roomId=` only and offer `gaming-pool` plus the signed player token as WebSocket subprotocols. The game server selects `gaming-pool`, verifies the token from the protocol header, verifies the room belongs to its own advertised address, and resolves room metadata from Redis on first connection. Do not put credentials in the URL.
 - Crash recovery: on boot, before listening, the server sweeps Redis of persistent `room:` keys whose `server` field matches its own `GAME_SERVER_ADDR` (rooms live in a previous run, now orphans). Pending-TTL rooms are left to connect or expire; stale `playerroom:` pointers self-heal lazily.
+- On `SIGTERM`/`SIGINT`, stop accepting sockets, close current clients, and drain the score queue within a bounded shutdown deadline before exiting.
 - Force full page load when leaving a game page (Unity WebGL memory is not reliably released on SPA navigation).
 
 ## Web app rules

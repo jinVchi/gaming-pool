@@ -37,16 +37,20 @@ mergeInto(LibraryManager.library, {
     window.__gamingPoolSockets[gameObjectName] = socket;
 
     socket.onopen = function () {
+      if (window.__gamingPoolSockets[gameObjectName] !== socket) return;
       SendMessage(gameObjectName, "HandleSocketOpen");
     };
     socket.onmessage = function (event) {
+      if (window.__gamingPoolSockets[gameObjectName] !== socket) return;
       SendMessage(gameObjectName, "HandleSocketMessage", event.data);
     };
     socket.onclose = function (event) {
-      SendMessage(gameObjectName, "HandleSocketClose", String(event.code));
+      if (window.__gamingPoolSockets[gameObjectName] !== socket) return;
       delete window.__gamingPoolSockets[gameObjectName];
+      SendMessage(gameObjectName, "HandleSocketClose", String(event.code));
     };
     socket.onerror = function () {
+      if (window.__gamingPoolSockets[gameObjectName] !== socket) return;
       SendMessage(gameObjectName, "HandleSocketError", "WebSocket error");
     };
   },
@@ -65,7 +69,6 @@ mergeInto(LibraryManager.library, {
     var socket = window.__gamingPoolSockets && window.__gamingPoolSockets[gameObjectName];
     if (socket) {
       socket.close();
-      delete window.__gamingPoolSockets[gameObjectName];
     }
   },
 });
