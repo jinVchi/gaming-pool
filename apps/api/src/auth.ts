@@ -14,6 +14,8 @@ export const auth = betterAuth({
   advanced: {
     // apps/web (:3000) and apps/api (:4000) are different origins in dev, so the
     // session cookie needs SameSite=None to survive the cross-origin fetch.
+    // Browsers allow Secure cookies on http://localhost as a development-only
+    // trustworthy-origin exception; production still requires HTTPS.
     defaultCookieAttributes: {
       sameSite: "none",
       secure: true,

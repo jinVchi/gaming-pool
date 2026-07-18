@@ -20,7 +20,7 @@ const joinResponse = await fetch("http://localhost:4000/rooms/chess/join", {
 if (!joinResponse.ok) throw new Error(`room join failed: ${await joinResponse.text()}`);
 const assignment = await joinResponse.json();
 
-const ws = new WebSocket(`${assignment.server}/?roomId=${roomId}&token=${encodeURIComponent(credential.token)}`);
+const ws = new WebSocket(`${assignment.server}/?roomId=${roomId}`, ["gaming-pool", credential.token]);
 
 ws.on("open", () => {
   console.log("connected as TestBot, sending ready...");

@@ -1,4 +1,5 @@
 import "dotenv/config";
+import type { IncomingMessage } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { getGameAuthSecret, verifyPlayerToken } from "@gaming-pool/shared";
 import {
@@ -9,42 +10,82 @@ import {
   playerActiveRoom,
   claimPlayerSeat,
   releasePlayerSeat,
+  assertGameRegistryConsistency,
   sweepOrphanedRooms,
 } from "./rooms";
 
 const port = Number(process.env.PORT ?? 5000);
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const MAX_MESSAGE_BYTES = 16 * 1024;
-const MESSAGE_RATE_WINDOW_MS = 10_000;
-const MAX_MESSAGES_PER_WINDOW = 120;
+const BURST_RATE_WINDOW_MS = 10_000;
+const MAX_BURST_MESSAGES = 120;
+const SUSTAINED_RATE_WINDOW_MS = 60_000;
+const MAX_SUSTAINED_MESSAGES = 600;
+const SOCKET_PROTOCOL = "gaming-pool";
 const gameAuthSecret = getGameAuthSecret();
 // Advertised address, must match what matchmaking hands out for this server.
 const serverAddr = process.env.GAME_SERVER_ADDR ?? `ws://localhost:${port}`;
 
 // Crash recovery: reclaim Redis from a previous run before accepting connections.
+assertGameRegistryConsistency();
 await sweepOrphanedRooms(serverAddr);
 
 // One process hosts many rooms across multiple games; game logic loaded from packages/games.
-const wss = new WebSocketServer({ port, perMessageDeflate: false, maxPayload: MAX_MESSAGE_BYTES });
+const wss = new WebSocketServer({
+  port,
+  perMessageDeflate: false,
+  maxPayload: MAX_MESSAGE_BYTES,
+  handleProtocols(protocols) {
+    return protocols.has(SOCKET_PROTOCOL) ? SOCKET_PROTOCOL : false;
+  },
+});
 const alive = new WeakMap<WebSocket, boolean>();
-const messageRates = new WeakMap<WebSocket, { windowStartedAt: number; count: number }>();
+const messageRates = new WeakMap<
+  WebSocket,
+  { burstStartedAt: number; burstCount: number; sustainedStartedAt: number; sustainedCount: number }
+>();
 
-function acceptsMessage(socket: WebSocket): boolean {
+function messageRateVerdict(socket: WebSocket): "accept" | "drop" | "close" {
   const now = Date.now();
   const rate = messageRates.get(socket);
-  if (!rate || now - rate.windowStartedAt >= MESSAGE_RATE_WINDOW_MS) {
-    messageRates.set(socket, { windowStartedAt: now, count: 1 });
-    return true;
+  if (!rate) {
+    messageRates.set(socket, {
+      burstStartedAt: now,
+      burstCount: 1,
+      sustainedStartedAt: now,
+      sustainedCount: 1,
+    });
+    return "accept";
   }
-  rate.count += 1;
-  return rate.count <= MAX_MESSAGES_PER_WINDOW;
+  if (now - rate.burstStartedAt >= BURST_RATE_WINDOW_MS) {
+    rate.burstStartedAt = now;
+    rate.burstCount = 0;
+  }
+  if (now - rate.sustainedStartedAt >= SUSTAINED_RATE_WINDOW_MS) {
+    rate.sustainedStartedAt = now;
+    rate.sustainedCount = 0;
+  }
+  rate.burstCount += 1;
+  rate.sustainedCount += 1;
+  if (rate.sustainedCount > MAX_SUSTAINED_MESSAGES) return "close";
+  if (rate.burstCount > MAX_BURST_MESSAGES) return "drop";
+  return "accept";
 }
 
-wss.on("connection", async (socket, req) => {
+function tokenFromProtocols(header: string | string[] | undefined): string | null {
+  const value = Array.isArray(header) ? header.join(",") : header;
+  return value
+    ?.split(",")
+    .map((part) => part.trim())
+    .find((part) => part !== SOCKET_PROTOCOL) ?? null;
+}
+
+async function handleConnection(socket: WebSocket, req: IncomingMessage): Promise<void> {
+  socket.on("error", (err) => console.warn("[socket]", err.message));
   // Parse query params.
   const url = new URL(req.url ?? "", "http://localhost");
   const roomId = url.searchParams.get("roomId");
-  const playerToken = url.searchParams.get("token");
+  const playerToken = tokenFromProtocols(req.headers["sec-websocket-protocol"]);
   const player = playerToken ? verifyPlayerToken(playerToken, gameAuthSecret) : null;
 
   if (!roomId) {
@@ -58,7 +99,7 @@ wss.on("connection", async (socket, req) => {
   const { playerId, displayName } = player;
 
   // Load or create the in-memory room.
-  const room = await getOrCreateRoom(roomId);
+  const room = await getOrCreateRoom(roomId, serverAddr);
   if (!room) {
     socket.close(4004, "room not found");
     return;
@@ -99,20 +140,29 @@ wss.on("connection", async (socket, req) => {
   }
 
   // Join + heartbeat tracking.
-  addPlayer(room, { id: playerId, displayName }, socket);
+  addPlayer(room, { id: playerId, displayName, isGuest: player.isGuest }, socket);
   alive.set(socket, true);
-  messageRates.set(socket, { windowStartedAt: Date.now(), count: 0 });
 
   socket.on("pong", () => alive.set(socket, true));
   socket.on("message", (raw) => {
-    if (!acceptsMessage(socket)) {
+    const verdict = messageRateVerdict(socket);
+    if (verdict === "close") {
       socket.close(4008, "message rate limit exceeded");
       return;
     }
+    if (verdict === "drop") return;
     handleMessage(room, playerId, raw.toString());
   });
-  socket.on("error", (err) => console.warn(`[socket ${playerId}]`, err.message));
   socket.on("close", () => removePlayer(room, playerId));
+}
+
+wss.on("connection", (socket, req) => {
+  void handleConnection(socket, req).catch((err: unknown) => {
+    console.error("[connection] failed:", err);
+    if (socket.readyState === socket.OPEN || socket.readyState === socket.CONNECTING) {
+      socket.close(1011, "temporary server error");
+    }
+  });
 });
 
 // Terminate dead sockets.

@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-const TOKEN_VERSION = 1;
+const TOKEN_VERSION = 2;
 const DEFAULT_TOKEN_TTL_S = 30 * 60;
 const DEV_GAME_AUTH_SECRET = "dev-only-game-auth-secret-change-me";
 
@@ -8,6 +8,7 @@ export interface PlayerTokenPayload {
   version: typeof TOKEN_VERSION;
   playerId: string;
   displayName: string;
+  isGuest: boolean;
   expiresAt: number;
 }
 
@@ -33,7 +34,7 @@ export function deriveGuestPlayerId(credential: string, secret: string): string 
 }
 
 export function signPlayerToken(
-  player: { playerId: string; displayName: string },
+  player: { playerId: string; displayName: string; isGuest: boolean },
   secret: string,
   ttlSeconds = DEFAULT_TOKEN_TTL_S,
 ): string {
@@ -41,6 +42,7 @@ export function signPlayerToken(
     version: TOKEN_VERSION,
     playerId: player.playerId,
     displayName: player.displayName,
+    isGuest: player.isGuest,
     expiresAt: Math.floor(Date.now() / 1000) + ttlSeconds,
   };
   const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
@@ -74,6 +76,7 @@ export function verifyPlayerToken(token: string, secret: string): PlayerTokenPay
       typeof payload.displayName !== "string" ||
       payload.displayName.length < 1 ||
       payload.displayName.length > 48 ||
+      typeof payload.isGuest !== "boolean" ||
       typeof payload.expiresAt !== "number" ||
       !Number.isSafeInteger(payload.expiresAt) ||
       payload.expiresAt <= Math.floor(Date.now() / 1000)

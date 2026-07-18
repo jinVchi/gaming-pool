@@ -14,7 +14,6 @@ const CONTENT_TYPES = {
   ".json": "application/json",
   ".data": "application/octet-stream",
   ".html": "text/html",
-  ".symbols.json": "application/json",
 };
 
 function contentTypeFor(path) {
@@ -24,7 +23,13 @@ function contentTypeFor(path) {
 const server = createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  const requestedPath = normalize(decodeURIComponent(new URL(req.url ?? "/", "http://localhost").pathname));
+  let requestedPath;
+  try {
+    requestedPath = normalize(decodeURIComponent(new URL(req.url ?? "/", "http://localhost").pathname));
+  } catch {
+    res.writeHead(400).end("bad path");
+    return;
+  }
   if (requestedPath.includes("..")) {
     res.writeHead(400).end("bad path");
     return;

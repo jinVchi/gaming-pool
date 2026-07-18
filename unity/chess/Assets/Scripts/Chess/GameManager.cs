@@ -164,8 +164,8 @@ namespace GamingPool.Chess
         {
             State = ClientState.Connecting;
             lobbyBrowser.gameObject.SetActive(false);
-            var url = $"{assignment.Server}/?roomId={assignment.RoomId}&token={UnityWebRequest.EscapeURL(_playerToken)}";
-            networkClient.Connect(url);
+            var url = $"{assignment.Server}/?roomId={assignment.RoomId}";
+            networkClient.Connect(url, _playerToken);
         }
 
         private void HandleMessage(string json)

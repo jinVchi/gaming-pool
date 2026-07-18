@@ -6,6 +6,7 @@ import {
   gameConfigs,
   playerRoomKey,
   releasePlayerRoom,
+  releaseRoomCode,
   roomCodeKey,
   roomKey,
   roomListKey,
@@ -24,19 +25,48 @@ function generateJoinCode(): string {
 
 // TTL until host WebSocket joins and persists keys.
 const PENDING_ROOM_TTL_S = 120;
+const MAX_JOIN_CODE_ATTEMPTS = 20;
+
+export class MatchmakingError extends Error {
+  constructor(message: string, readonly status: 404 | 409 = 409) {
+    super(message);
+    this.name = "MatchmakingError";
+  }
+}
+
+interface ActiveRoom {
+  roomId: string;
+  meta: Record<string, string>;
+  pointerTtl: number;
+}
 
 // Check if the player has an active room.
-async function activeRoomFor(playerId: string): Promise<string | null> {
-  // playerRoomKey exists?
+async function activeRoomFor(playerId: string): Promise<ActiveRoom | null> {
   const roomId = await redis.get(playerRoomKey(playerId));
   if (!roomId) return null;
-  // roomKey exists?
-  if (await redis.exists(roomKey(roomId))) return roomId;
+  const [meta, pointerTtl] = await Promise.all([
+    redis.hgetall(roomKey(roomId)),
+    redis.ttl(playerRoomKey(playerId)),
+  ]);
+  if (meta.game) return { roomId, meta, pointerTtl };
   // Stale pointer (room gone) — compare-and-delete so a concurrent claim of a
   // newer room can't be wiped by this cleanup.
   await releasePlayerRoom(redis, playerId, roomId);
   // No active room
   return null;
+}
+
+function busyPlayerError(): MatchmakingError {
+  return new MatchmakingError("you already have an active room or game — finish or leave it first");
+}
+
+async function reserveJoinCode(roomId: string): Promise<string> {
+  for (let attempt = 0; attempt < MAX_JOIN_CODE_ATTEMPTS; attempt++) {
+    const joinCode = generateJoinCode();
+    const reserved = await redis.set(roomCodeKey(joinCode), roomId, "EX", PENDING_ROOM_TTL_S, "NX");
+    if (reserved) return joinCode;
+  }
+  throw new Error("failed to allocate a unique join code");
 }
 // Assign an auto room to the player.
 export async function assignAutoRoom(slug: GameSlug, playerId: string): Promise<RoomAssignment> {
@@ -47,7 +77,17 @@ export async function assignAutoRoom(slug: GameSlug, playerId: string): Promise<
 
   const activeRoom = await activeRoomFor(playerId);
   if (activeRoom) {
-    throw new Error("you already have an active room or game — finish or leave it first");
+    if (activeRoom.pointerTtl > 0 && activeRoom.meta.game === slug && activeRoom.meta.server) {
+      const claim = await claimPendingRoomSeat(redis, playerId, activeRoom.roomId, PENDING_ROOM_TTL_S);
+      if (claim === "claimed") return { server: activeRoom.meta.server, roomId: activeRoom.roomId };
+      if (claim === "full" || claim === "room-not-found") {
+        await releasePlayerRoom(redis, playerId, activeRoom.roomId);
+      } else {
+        throw busyPlayerError();
+      }
+    } else {
+      throw busyPlayerError();
+    }
   }
 
   const candidates = await redis.zrevrange(roomsKey(slug), 0, -1, "WITHSCORES");
@@ -61,6 +101,8 @@ export async function assignAutoRoom(slug: GameSlug, playerId: string): Promise<
       await redis.zrem(roomsKey(slug), roomId);
       continue;
     }
+    const server = await redis.hget(roomKey(roomId), "server");
+    if (!server) throw new Error(`room "${roomId}" has no game server`);
     const claim = await claimPendingRoomSeat(redis, playerId, roomId, PENDING_ROOM_TTL_S);
     if (claim === "full") continue;
     if (claim === "room-not-found") {
@@ -68,10 +110,8 @@ export async function assignAutoRoom(slug: GameSlug, playerId: string): Promise<
       continue;
     }
     if (claim === "player-busy" || claim === "already-active") {
-      throw new Error("you already have an active room or game — finish or leave it first");
+      throw busyPlayerError();
     }
-    const server = await redis.hget(roomKey(roomId), "server");
-    if (!server) throw new Error(`room "${roomId}" has no game server`);
     return { server, roomId };
   }
 
@@ -105,15 +145,28 @@ export async function createRoom(
     throw new Error(`no 'created' policy config for game "${slug}"`);
   }
 
-  if (await activeRoomFor(playerId)) {
-    throw new Error("you already have an active room or game — finish or leave it first");
+  const activeRoom = await activeRoomFor(playerId);
+  if (activeRoom) {
+    if (
+      activeRoom.pointerTtl > 0 &&
+      activeRoom.meta.game === slug &&
+      activeRoom.meta.hostId === playerId &&
+      activeRoom.meta.server
+    ) {
+      return {
+        server: activeRoom.meta.server,
+        roomId: activeRoom.roomId,
+        ...(activeRoom.meta.joinCode ? { joinCode: activeRoom.meta.joinCode } : {}),
+      };
+    }
+    throw busyPlayerError();
   }
 
   const roomId = randomUUID();
   // Atomic one-room-per-player claim.
   const reserved = await claimPlayerRoom(redis, playerId, roomId, PENDING_ROOM_TTL_S);
   if (!reserved) {
-    throw new Error("you already have an active room or game — finish or leave it first");
+    throw busyPlayerError();
   }
 
   const hash: Record<string, string | number> = {
@@ -127,16 +180,17 @@ export async function createRoom(
 
   // For private rooms, generate a join code.
   let joinCode: string | undefined;
-  if (config.joinCode) {
-    joinCode = generateJoinCode();
-    hash.joinCode = joinCode;
-  }
-
-  await redis.hset(roomKey(roomId), hash);
-  await redis.expire(roomKey(roomId), PENDING_ROOM_TTL_S);
-
-  if (joinCode) {
-    await redis.set(roomCodeKey(joinCode), roomId, "EX", PENDING_ROOM_TTL_S);
+  try {
+    if (config.joinCode) {
+      joinCode = await reserveJoinCode(roomId);
+      hash.joinCode = joinCode;
+    }
+    await redis.hset(roomKey(roomId), hash);
+    await redis.expire(roomKey(roomId), PENDING_ROOM_TTL_S);
+  } catch (err) {
+    await releasePlayerRoom(redis, playerId, roomId);
+    if (joinCode) await releaseRoomCode(redis, joinCode, roomId);
+    throw err;
   }
   // Public (no-joinCode) rooms are NOT listed here: the game server adds them
   // to roomlist:{slug} when the creator's socket joins. Listing earlier lets a
@@ -149,35 +203,37 @@ export async function createRoom(
 async function reservePlayerSeat(playerId: string, roomId: string): Promise<void> {
   const result = await claimPendingRoomSeat(redis, playerId, roomId, PENDING_ROOM_TTL_S);
   if (result === "claimed") return;
-  if (result === "room-not-found") throw new Error(`room "${roomId}" not found`);
-  if (result === "full") throw new Error(`room "${roomId}" is full`);
-  if (result === "already-active") throw new Error("you are already in this room");
-  throw new Error("you already have an active room or game — finish or leave it first");
+  if (result === "room-not-found") throw new MatchmakingError(`room "${roomId}" not found`, 404);
+  if (result === "full") throw new MatchmakingError(`room "${roomId}" is full`);
+  if (result === "already-active") throw new MatchmakingError("you are already in this room");
+  throw busyPlayerError();
 }
 
 export async function joinRoomByCode(slug: GameSlug, joinCode: string, playerId: string): Promise<RoomAssignment> {
   const roomId = await redis.get(roomCodeKey(joinCode.toUpperCase()));
   if (!roomId) {
-    throw new Error(`no room found for join code "${joinCode}"`);
+    throw new MatchmakingError(`no room found for join code "${joinCode}"`, 404);
   }
   const room = await redis.hgetall(roomKey(roomId));
   if (room.game !== slug) {
-    throw new Error(`join code "${joinCode}" does not belong to game "${slug}"`);
+    throw new MatchmakingError(`join code "${joinCode}" does not belong to game "${slug}"`, 404);
   }
+  if (!room.server) throw new Error(`room "${roomId}" has no game server`);
   await reservePlayerSeat(playerId, roomId);
-  return { server: room.server!, roomId };
+  return { server: room.server, roomId };
 }
 
 export async function joinRoomById(slug: GameSlug, roomId: string, playerId: string): Promise<RoomAssignment> {
   const room = await redis.hgetall(roomKey(roomId));
   if (!room.game) {
-    throw new Error(`room "${roomId}" not found`);
+    throw new MatchmakingError(`room "${roomId}" not found`, 404);
   }
   if (room.game !== slug) {
-    throw new Error(`room "${roomId}" does not belong to game "${slug}"`);
+    throw new MatchmakingError(`room "${roomId}" does not belong to game "${slug}"`, 404);
   }
+  if (!room.server) throw new Error(`room "${roomId}" has no game server`);
   await reservePlayerSeat(playerId, roomId);
-  return { server: room.server!, roomId };
+  return { server: room.server, roomId };
 }
 
 export interface OpenRoom {

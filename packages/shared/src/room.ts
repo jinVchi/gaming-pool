@@ -7,8 +7,6 @@ export interface GameConfig {
   fillStrategy?: "fullest";
 }
 
-export type GameSlug = string;
-
 export interface RoomAssignment {
   server: string;
   roomId: string;
@@ -17,4 +15,5 @@ export interface RoomAssignment {
 export interface Player {
   id: string;
   displayName: string;
+  isGuest: boolean;
 }

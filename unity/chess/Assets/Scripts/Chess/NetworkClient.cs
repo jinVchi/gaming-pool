@@ -25,13 +25,13 @@ namespace GamingPool.Chess
         public event Action<string> OnError;
 
 #if UNITY_WEBGL && !UNITY_EDITOR
-        [DllImport("__Internal")] private static extern void WSConnect(string url, string gameObjectName);
+        [DllImport("__Internal")] private static extern void WSConnect(string url, string gameObjectName, string playerToken);
         [DllImport("__Internal")] private static extern void WSSend(string gameObjectName, string data);
         [DllImport("__Internal")] private static extern void WSClose(string gameObjectName);
 
-        public void Connect(string url)
+        public void Connect(string url, string playerToken)
         {
-            WSConnect(url, gameObject.name);
+            WSConnect(url, gameObject.name, playerToken);
         }
 
         public void Send(string data)
@@ -54,9 +54,11 @@ namespace GamingPool.Chess
         private CancellationTokenSource _cts;
         private readonly ConcurrentQueue<Action> _mainThreadQueue = new ConcurrentQueue<Action>();
 
-        public async void Connect(string url)
+        public async void Connect(string url, string playerToken)
         {
             _socket = new ClientWebSocket();
+            _socket.Options.AddSubProtocol("gaming-pool");
+            _socket.Options.AddSubProtocol(playerToken);
             _cts = new CancellationTokenSource();
             try
             {

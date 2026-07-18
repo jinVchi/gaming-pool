@@ -1,5 +1,5 @@
 import Redis from "ioredis";
-import type { GameSlug } from "./room";
+import type { GameSlug } from "./game-config";
 
 export function createRedisClient(url = process.env.REDIS_URL ?? "redis://localhost:6379/1"): Redis {
   return new Redis(url);
@@ -15,6 +15,15 @@ export function roomKey(roomId: string): string {
 
 export function roomCodeKey(joinCode: string): string {
   return `roomcode:${joinCode}`;
+}
+
+const RELEASE_ROOM_CODE = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end
+return 0
+`;
+
+export async function releaseRoomCode(redis: Redis, joinCode: string, roomId: string): Promise<void> {
+  await redis.eval(RELEASE_ROOM_CODE, 1, roomCodeKey(joinCode), roomId);
 }
 
 export function roomReservationsKey(roomId: string): string {

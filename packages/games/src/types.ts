@@ -3,6 +3,8 @@ import type { Player } from "@gaming-pool/shared";
 export interface RoomContext {
   broadcast(message: unknown): void;
   send(playerId: string, message: unknown): void;
+  disconnect(playerId: string, code: number, reason: string): void;
+  recordScore(playerId: string, score: number): void;
 }
 
 export interface GameModule<TState = unknown> {

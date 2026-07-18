@@ -159,9 +159,9 @@ namespace GamingPool.Snake
                 yield break;
             }
 
-            var wsUrl = $"{server}/?roomId={roomId}&token={UnityWebRequest.EscapeURL(_playerToken)}";
+            var wsUrl = $"{server}/?roomId={roomId}";
             SetStatus("Connecting...");
-            networkClient.Connect(wsUrl);
+            networkClient.Connect(wsUrl, _playerToken);
         }
 
         private void HandleOpen()
@@ -206,6 +206,7 @@ namespace GamingPool.Snake
 
         private void HandleClose(int code)
         {
+            if (_isDead) return;
             SetStatus($"Disconnected (code {code}).");
         }
 

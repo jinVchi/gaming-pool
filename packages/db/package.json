@@ -12,13 +12,13 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "drizzle-orm": "^0.38.3",
+    "drizzle-orm": "^0.45.2",
     "pg": "^8.13.1"
   },
   "devDependencies": {
     "@types/pg": "^8.11.10",
     "dotenv": "^16.4.7",
-    "drizzle-kit": "^0.30.1",
+    "drizzle-kit": "^0.31.4",
     "typescript": "^7.0.2"
   }
 }

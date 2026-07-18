@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { gameConfigs } from "@gaming-pool/shared";
+import { gameConfigs, isGameSlug } from "@gaming-pool/shared";
 import { gameContent } from "@/lib/game-content";
 import { PlayShell } from "@/components/PlayShell";
 
@@ -14,8 +14,8 @@ export function generateStaticParams() {
 
 export async function generateMetadata({ params }: GamePageParams): Promise<Metadata> {
   const { slug } = await params;
+  if (!isGameSlug(slug)) return {};
   const content = gameContent[slug];
-  if (!content) return {};
 
   return {
     title: `${content.title} — Gaming Pool`,
@@ -25,9 +25,9 @@ export async function generateMetadata({ params }: GamePageParams): Promise<Meta
 
 export default async function GamePage({ params }: GamePageParams) {
   const { slug } = await params;
+  if (!isGameSlug(slug)) notFound();
   const content = gameContent[slug];
   const config = gameConfigs[slug];
-  if (!content || !config) notFound();
 
   const jsonLd = {
     "@context": "https://schema.org",

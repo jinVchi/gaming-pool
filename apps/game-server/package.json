@@ -10,6 +10,7 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
+    "@gaming-pool/db": "*",
     "@gaming-pool/games": "*",
     "@gaming-pool/shared": "*",
     "dotenv": "^16.4.7",

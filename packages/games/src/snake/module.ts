@@ -77,6 +77,8 @@ export const snakeModule: GameModule<SnakeModuleState> = {
       stepped = true;
       for (const entry of result.died) {
         state.ctx.send(entry.playerId, { type: "died", payload: { score: entry.score } });
+        state.ctx.recordScore(entry.playerId, entry.score);
+        state.ctx.disconnect(entry.playerId, 4100, "game over");
       }
     }
     if (stepped) {

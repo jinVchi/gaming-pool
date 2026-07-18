@@ -6,15 +6,18 @@ import {
   roomCodeKey,
   roomListKey,
   roomReservationsKey,
+  releaseRoomCode,
   playerRoomKey,
   claimReservedPlayerSeat,
   rollbackClaimedPlayerSeat,
   releasePlayerRoom,
   gameConfigs,
+  isGameSlug,
 } from "@gaming-pool/shared";
-import type { Player } from "@gaming-pool/shared";
+import type { GameSlug, Player } from "@gaming-pool/shared";
 import { gameModules } from "@gaming-pool/games";
 import type { GameModule, RoomContext } from "@gaming-pool/games";
+import { enqueueScore } from "./scores";
 
 const TICK_INTERVAL_MS = 50;
 const EMPTY_ROOM_TTL_MS = 5 * 60 * 1000;
@@ -27,7 +30,7 @@ const redis = createRedisClient();
 
 interface RoomInstance {
   roomId: string;
-  slug: string;
+  slug: GameSlug;
   module: GameModule<unknown>;
   state: unknown;
   maxPlayers: number;
@@ -35,12 +38,26 @@ interface RoomInstance {
   joinCode: string | null;
   hostId: string | null;
   players: Map<string, WebSocket>;
+  scoreEligiblePlayers: Set<string>;
   tickHandle: ReturnType<typeof setInterval>;
   emptySince: number | null;
 }
 
 const rooms = new Map<string, RoomInstance>();
 const pendingCreations = new Map<string, Promise<RoomInstance | null>>();
+
+// Fail at boot if the independently maintained config and module registries drift.
+export function assertGameRegistryConsistency(): void {
+  const modules = gameModules as Record<string, unknown>;
+  const configs = gameConfigs as Record<string, unknown>;
+  const missingModules = Object.keys(configs).filter((slug) => !modules[slug]);
+  const missingConfigs = Object.keys(modules).filter((slug) => !configs[slug]);
+  if (missingModules.length || missingConfigs.length) {
+    throw new Error(
+      `game registry mismatch (missing modules: ${missingModules.join(", ") || "none"}; missing configs: ${missingConfigs.join(", ") || "none"})`,
+    );
+  }
+}
 
 // Boot sweep: delete rooms this server owned in a previous (crashed) run.
 // Persistent room keys (TTL -1) were live on the dead process and are now
@@ -59,13 +76,13 @@ export async function sweepOrphanedRooms(serverAddr: string): Promise<void> {
       const roomId = key.slice(roomKey("").length);
       const pipeline = redis.pipeline();
       pipeline.del(key);
-      if (meta.game) {
+      if (meta.game && isGameSlug(meta.game)) {
         pipeline.zrem(roomsKey(meta.game), roomId);
         pipeline.srem(roomListKey(meta.game), roomId);
       }
-      if (meta.joinCode) pipeline.del(roomCodeKey(meta.joinCode));
       pipeline.del(roomReservationsKey(roomId));
       await pipeline.exec();
+      if (meta.joinCode) await releaseRoomCode(redis, meta.joinCode, roomId);
       removed++;
     }
   } while (cursor !== "0");
@@ -73,28 +90,30 @@ export async function sweepOrphanedRooms(serverAddr: string): Promise<void> {
 }
 
 // Return existing room, share in-flight create, or start one.
-export async function getOrCreateRoom(roomId: string): Promise<RoomInstance | null> {
+export async function getOrCreateRoom(roomId: string, serverAddr: string): Promise<RoomInstance | null> {
   const existing = rooms.get(roomId);
   if (existing) return existing;
 
   const pending = pendingCreations.get(roomId);
   if (pending) return pending;
 
-  const creation = createRoom(roomId).finally(() => pendingCreations.delete(roomId));
+  const creation = createRoom(roomId, serverAddr).finally(() => pendingCreations.delete(roomId));
   pendingCreations.set(roomId, creation);
   return creation;
 }
 
-async function createRoom(roomId: string): Promise<RoomInstance | null> {
+async function createRoom(roomId: string, serverAddr: string): Promise<RoomInstance | null> {
   // Load Redis meta + game module.
   const meta = await redis.hgetall(roomKey(roomId));
-  if (!meta.game) return null;
+  if (!meta.game || !isGameSlug(meta.game) || meta.server !== serverAddr) return null;
 
-  const module = gameModules[meta.game];
+  const slug = meta.game;
+  const module = gameModules[slug];
   if (!module) return null;
 
-  const config = gameConfigs[meta.game];
+  const config = gameConfigs[slug];
   const players = new Map<string, WebSocket>();
+  const scoreEligiblePlayers = new Set<string>();
 
   // Wire send/broadcast for the game module.
   const ctx: RoomContext = {
@@ -105,6 +124,13 @@ async function createRoom(roomId: string): Promise<RoomInstance | null> {
     send(playerId, message) {
       players.get(playerId)?.send(JSON.stringify(message));
     },
+    disconnect(playerId, code, reason) {
+      players.get(playerId)?.close(code, reason);
+    },
+    recordScore(playerId, score) {
+      if (!scoreEligiblePlayers.has(playerId)) return;
+      enqueueScore({ userId: playerId, gameSlug: slug, score });
+    },
   };
 
   const state = module.createState(roomId, ctx);
@@ -112,7 +138,7 @@ async function createRoom(roomId: string): Promise<RoomInstance | null> {
   // Build room + start tick loop.
   const room: RoomInstance = {
     roomId,
-    slug: meta.game,
+    slug,
     module,
     state,
     maxPlayers: Number(meta.maxPlayers) || 0,
@@ -120,6 +146,7 @@ async function createRoom(roomId: string): Promise<RoomInstance | null> {
     joinCode: meta.joinCode ?? null,
     hostId: meta.hostId ?? null,
     players,
+    scoreEligiblePlayers,
     emptySince: Date.now(),
     tickHandle: setInterval(() => {
       try {
@@ -166,6 +193,7 @@ export function addPlayer(room: RoomInstance, player: Player, socket: WebSocket)
   // Attach socket + clear empty timer. playerroom was already claimed
   // (awaited) by the connection handler.
   room.players.set(player.id, socket);
+  if (!player.isGuest) room.scoreEligiblePlayers.add(player.id);
   room.emptySince = null;
 
   try {
@@ -214,6 +242,7 @@ export function handleMessage(room: RoomInstance, playerId: string, raw: string)
 
 export function removePlayer(room: RoomInstance, playerId: string): void {
   room.players.delete(playerId);
+  room.scoreEligiblePlayers.delete(playerId);
 
   // Free playerroom if still this room (atomic compare-and-delete — the old
   // GET-then-DEL could wipe a pointer to a room the player just moved to).
@@ -259,10 +288,10 @@ async function destroyRoom(room: RoomInstance, reason: string): Promise<void> {
   const pipeline = redis.pipeline();
   pipeline.del(roomKey(room.roomId));
   if (room.isAuto) pipeline.zrem(roomsKey(room.slug), room.roomId);
-  if (room.joinCode) pipeline.del(roomCodeKey(room.joinCode));
   pipeline.del(roomReservationsKey(room.roomId));
   pipeline.srem(roomListKey(room.slug), room.roomId);
   await pipeline.exec();
+  if (room.joinCode) await releaseRoomCode(redis, room.joinCode, room.roomId);
 
   console.log(`[room ${room.roomId}] closed (${reason})`);
 }

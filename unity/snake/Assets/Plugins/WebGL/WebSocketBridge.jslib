@@ -24,13 +24,14 @@ mergeInto(LibraryManager.library, {
     return buffer;
   },
 
-  WSConnect: function (urlPtr, gameObjectNamePtr) {
+  WSConnect: function (urlPtr, gameObjectNamePtr, tokenPtr) {
     var url = UTF8ToString(urlPtr);
     var gameObjectName = UTF8ToString(gameObjectNamePtr);
+    var token = UTF8ToString(tokenPtr);
 
     if (!window.__gamingPoolSockets) window.__gamingPoolSockets = {};
 
-    var socket = new WebSocket(url);
+    var socket = new WebSocket(url, ["gaming-pool", token]);
     window.__gamingPoolSockets[gameObjectName] = socket;
 
     socket.onopen = function () {
