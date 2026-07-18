@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 const CDN_URL = process.env.NEXT_PUBLIC_CDN_URL ?? "http://localhost:8787";
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 interface UnityInstance {
   Quit: () => Promise<void>;
@@ -14,7 +15,8 @@ declare global {
       canvas: HTMLCanvasElement,
       config: Record<string, unknown>,
     ) => Promise<UnityInstance>;
-    __gamingPoolPlayer?: { playerId: string; displayName: string };
+    __gamingPoolPlayer?: { playerId: string; displayName: string; token: string };
+    __gamingPoolConfig?: { apiBaseUrl: string };
   }
 }
 
@@ -22,10 +24,12 @@ export function UnityLoader({
   slug,
   playerId,
   displayName,
+  playerToken,
 }: {
   slug: string;
   playerId: string;
   displayName: string;
+  playerToken: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,10 +38,10 @@ export function UnityLoader({
     let unityInstance: UnityInstance | null = null;
     let cancelled = false;
 
-    // Unity reads this through the WebGL jslib bridge (GPGetPlayerIdentity)
-    // instead of inventing its own identity — must be set before the build
-    // boots.
-    window.__gamingPoolPlayer = { playerId, displayName };
+    // Unity reads signed identity and runtime endpoints through WebGL bridges.
+    // Set both before the build boots.
+    window.__gamingPoolPlayer = { playerId, displayName, token: playerToken };
+    window.__gamingPoolConfig = { apiBaseUrl: API_URL };
 
     // Unity's WebGL output names the sub-files after the build's output folder
     // and nests them in a Build/ subfolder. Convention: each game is built into
@@ -75,7 +79,7 @@ export function UnityLoader({
       document.body.removeChild(script);
       void unityInstance?.Quit();
     };
-  }, [slug, playerId, displayName]);
+  }, [slug, playerId, displayName, playerToken]);
 
   if (error) {
     return <p className="game-status" role="alert">{error}</p>;

@@ -16,6 +16,14 @@ mergeInto(LibraryManager.library, {
     return buffer;
   },
 
+  GPGetApiBaseUrl: function () {
+    var apiBaseUrl = (window.__gamingPoolConfig && window.__gamingPoolConfig.apiBaseUrl) || "";
+    var size = lengthBytesUTF8(apiBaseUrl) + 1;
+    var buffer = _malloc(size);
+    stringToUTF8(apiBaseUrl, buffer, size);
+    return buffer;
+  },
+
   WSConnect: function (urlPtr, gameObjectNamePtr) {
     var url = UTF8ToString(urlPtr);
     var gameObjectName = UTF8ToString(gameObjectNamePtr);

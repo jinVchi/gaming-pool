@@ -32,6 +32,7 @@ namespace GamingPool.Snake
 
         private string _playerId;
         private string _displayName;
+        private string _playerToken;
         private string _localPlayerId;
         private Direction _lastSentDirection = Direction.None;
         private bool _isDead;
@@ -40,6 +41,7 @@ namespace GamingPool.Snake
 
 #if UNITY_WEBGL && !UNITY_EDITOR
         [DllImport("__Internal")] private static extern string GPGetPlayerIdentity();
+        [DllImport("__Internal")] private static extern string GPGetApiBaseUrl();
 #endif
 
         // The web shell owns identity (Better Auth user or persisted guest) and
@@ -56,6 +58,7 @@ namespace GamingPool.Snake
                     var identity = JObject.Parse(json);
                     _playerId = identity["playerId"]?.ToString();
                     _displayName = identity["displayName"]?.ToString();
+                    _playerToken = identity["token"]?.ToString();
                 }
             }
             catch (Exception e)
@@ -70,8 +73,17 @@ namespace GamingPool.Snake
             }
         }
 
+        private void ResolveApiBaseUrl()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            var configuredUrl = GPGetApiBaseUrl();
+            if (!string.IsNullOrEmpty(configuredUrl)) apiBaseUrl = configuredUrl.TrimEnd('/');
+#endif
+        }
+
         private void Start()
         {
+            ResolveApiBaseUrl();
             ResolveIdentity();
             networkClient.OnOpen += HandleOpen;
             networkClient.OnMessage += HandleMessage;
@@ -80,7 +92,44 @@ namespace GamingPool.Snake
 
             if (gameOverPanel != null) gameOverPanel.SetActive(false);
             SetStatus("Finding a match...");
-            StartCoroutine(Matchmake());
+            StartCoroutine(PreparePlayerAndMatchmake());
+        }
+
+        // Editor play mode has no web-shell token, so mint a guest credential
+        // through the same API exchange before entering matchmaking.
+        private IEnumerator PreparePlayerAndMatchmake()
+        {
+            if (string.IsNullOrEmpty(_playerToken))
+            {
+                var credentialBody = new JObject
+                {
+                    ["guestCredential"] = Guid.NewGuid().ToString("N"),
+                    ["displayName"] = _displayName,
+                }.ToString(Newtonsoft.Json.Formatting.None);
+                using var credentialRequest = new UnityWebRequest($"{apiBaseUrl}/player-token", "POST");
+                credentialRequest.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(credentialBody));
+                credentialRequest.downloadHandler = new DownloadHandlerBuffer();
+                credentialRequest.SetRequestHeader("Content-Type", "application/json");
+                yield return credentialRequest.SendWebRequest();
+
+                if (credentialRequest.result != UnityWebRequest.Result.Success)
+                {
+                    SetStatus($"Player authentication failed: {credentialRequest.error}");
+                    yield break;
+                }
+
+                var credential = JObject.Parse(credentialRequest.downloadHandler.text);
+                _playerId = credential["playerId"]?.ToString();
+                _displayName = credential["displayName"]?.ToString();
+                _playerToken = credential["token"]?.ToString();
+                if (string.IsNullOrEmpty(_playerId) || string.IsNullOrEmpty(_playerToken))
+                {
+                    SetStatus("Player authentication returned an unexpected response.");
+                    yield break;
+                }
+            }
+
+            yield return Matchmake();
         }
 
         private IEnumerator Matchmake()
@@ -91,6 +140,7 @@ namespace GamingPool.Snake
             request.uploadHandler = new UploadHandlerRaw(body);
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
+            request.SetRequestHeader("Authorization", $"Bearer {_playerToken}");
 
             yield return request.SendWebRequest();
 
@@ -109,7 +159,7 @@ namespace GamingPool.Snake
                 yield break;
             }
 
-            var wsUrl = $"{server}/?roomId={roomId}&playerId={_playerId}&displayName={UnityWebRequest.EscapeURL(_displayName)}";
+            var wsUrl = $"{server}/?roomId={roomId}&token={UnityWebRequest.EscapeURL(_playerToken)}";
             SetStatus("Connecting...");
             networkClient.Connect(wsUrl);
         }

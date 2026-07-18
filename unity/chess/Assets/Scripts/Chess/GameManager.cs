@@ -1,4 +1,6 @@
 using System;
+using System.Collections;
+using System.Text;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -33,6 +35,7 @@ namespace GamingPool.Chess
 
         private string _playerId;
         private string _displayName;
+        private string _playerToken;
         private string _localColor = "w";
 
         public ClientState State { get; private set; } = ClientState.Browsing;
@@ -55,6 +58,7 @@ namespace GamingPool.Chess
                     var identity = JObject.Parse(json);
                     _playerId = identity["playerId"]?.ToString();
                     _displayName = identity["displayName"]?.ToString();
+                    _playerToken = identity["token"]?.ToString();
                 }
             }
             catch (Exception e)
@@ -85,6 +89,45 @@ namespace GamingPool.Chess
             board.OnMoveAttempted += HandleMoveAttempted;
             if (backToLobbyButton != null) backToLobbyButton.onClick.AddListener(BackToLobby);
 
+            SetStatus("Preparing a secure game connection...");
+            StartCoroutine(PreparePlayer());
+        }
+
+        // Editor play mode has no web shell, so request a signed guest token.
+        private IEnumerator PreparePlayer()
+        {
+            if (string.IsNullOrEmpty(_playerToken))
+            {
+                var body = new JObject
+                {
+                    ["guestCredential"] = Guid.NewGuid().ToString("N"),
+                    ["displayName"] = _displayName,
+                }.ToString(Newtonsoft.Json.Formatting.None);
+                using var request = new UnityWebRequest($"{apiClient.ApiBaseUrl}/player-token", "POST");
+                request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/json");
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    SetStatus($"Player authentication failed: {request.error}");
+                    yield break;
+                }
+
+                var credential = JObject.Parse(request.downloadHandler.text);
+                _playerId = credential["playerId"]?.ToString();
+                _displayName = credential["displayName"]?.ToString();
+                _playerToken = credential["token"]?.ToString();
+                if (string.IsNullOrEmpty(_playerId) || string.IsNullOrEmpty(_playerToken))
+                {
+                    SetStatus("Player authentication returned an unexpected response.");
+                    yield break;
+                }
+            }
+
+            apiClient.ConfigurePlayerToken(_playerToken);
+            SetStatus(null);
             ShowBrowsing();
         }
 
@@ -101,7 +144,7 @@ namespace GamingPool.Chess
         private void HandleCreateRoom()
         {
             SetStatus("Creating room...");
-            apiClient.CreateRoom(_playerId, _displayName, ConnectToRoom, (error) => SetStatus($"Failed to create room: {error}"));
+            apiClient.CreateRoom(ConnectToRoom, (error) => SetStatus($"Failed to create room: {error}"));
         }
 
         private void HandleJoinRoom(string roomId)
@@ -109,7 +152,6 @@ namespace GamingPool.Chess
             SetStatus("Joining room...");
             apiClient.JoinRoom(
                 roomId,
-                _playerId,
                 ConnectToRoom,
                 (error) =>
                 {
@@ -122,7 +164,7 @@ namespace GamingPool.Chess
         {
             State = ClientState.Connecting;
             lobbyBrowser.gameObject.SetActive(false);
-            var url = $"{assignment.Server}/?roomId={assignment.RoomId}&playerId={_playerId}&displayName={UnityWebRequest.EscapeURL(_displayName)}";
+            var url = $"{assignment.Server}/?roomId={assignment.RoomId}&token={UnityWebRequest.EscapeURL(_playerToken)}";
             networkClient.Connect(url);
         }
 

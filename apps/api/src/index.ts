@@ -1,11 +1,19 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { gameConfigs } from "@gaming-pool/shared";
+import {
+  deriveGuestPlayerId,
+  gameConfigs,
+  getGameAuthSecret,
+  signPlayerToken,
+  verifyPlayerToken,
+  type PlayerTokenPayload,
+} from "@gaming-pool/shared";
 import { auth } from "./auth";
 import { assignAutoRoom, createRoom, joinRoomByCode, joinRoomById, listOpenRooms } from "./matchmaking";
 
 const app = new Hono();
+const gameAuthSecret = getGameAuthSecret();
 
 // WEB_ORIGIN is a comma-separated CORS allowlist (default: local web).
 const allowedOrigins = (process.env.WEB_ORIGIN ?? "http://localhost:3000")
@@ -17,7 +25,7 @@ app.use(
   cors({
     origin: allowedOrigins,
     allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["Content-Type"],
+    allowHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   }),
 );
@@ -28,14 +36,57 @@ app.get("/health", (c) => c.json({ ok: true }));
 // Better Auth session/login handlers.
 app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
+function authenticatedPlayer(authorization: string | undefined): PlayerTokenPayload | null {
+  if (!authorization?.startsWith("Bearer ")) return null;
+  return verifyPlayerToken(authorization.slice("Bearer ".length), gameAuthSecret);
+}
+
+// Exchange a Better Auth session or browser-held guest credential for a short-
+// lived game token used by matchmaking and the direct WebSocket connection.
+app.post("/player-token", async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  let playerId: string;
+  let displayName: string;
+
+  if (session?.user) {
+    playerId = session.user.id;
+    displayName = (session.user.name || "Player").slice(0, 48);
+  } else {
+    const body = await c.req
+      .json<{ guestCredential?: string; displayName?: string }>()
+      .catch(() => ({}) as Record<string, never>);
+    if (!body.guestCredential || !/^[a-f0-9]{32}$/i.test(body.guestCredential)) {
+      return c.json({ error: "a valid guest credential is required" }, 400);
+    }
+    if (!body.displayName || body.displayName.length > 32) {
+      return c.json({ error: "a guest display name between 1 and 32 characters is required" }, 400);
+    }
+    playerId = deriveGuestPlayerId(body.guestCredential, gameAuthSecret);
+    displayName = body.displayName;
+  }
+
+  return c.json({
+    playerId,
+    displayName,
+    token: signPlayerToken({ playerId, displayName }, gameAuthSecret),
+  });
+});
+
 // Auto-policy matchmaking → { server, roomId }.
 app.post("/matchmake/:slug", async (c) => {
   const slug = c.req.param("slug");
   const config = gameConfigs[slug];
   if (!config) return c.json({ error: `unknown game "${slug}"` }, 404);
 
+  const player = authenticatedPlayer(c.req.header("Authorization"));
+  if (!player) return c.json({ error: "valid player token required" }, 401);
+
   if (config.policy === "auto") {
-    return c.json(await assignAutoRoom(slug));
+    try {
+      return c.json(await assignAutoRoom(slug, player.playerId));
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 409);
+    }
   }
   return c.json({ error: `game "${slug}" uses 'created' policy — use POST /rooms/:slug` }, 400);
 });
@@ -48,13 +99,11 @@ app.post("/rooms/:slug", async (c) => {
     return c.json({ error: `game "${slug}" does not use 'created' policy` }, 400);
   }
 
-  const body = await c.req.json<{ playerId?: string; displayName?: string }>().catch(() => ({}) as Record<string, never>);
-  if (!body.playerId || !body.displayName) {
-    return c.json({ error: "playerId and displayName are required" }, 400);
-  }
+  const player = authenticatedPlayer(c.req.header("Authorization"));
+  if (!player) return c.json({ error: "valid player token required" }, 401);
 
   try {
-    return c.json(await createRoom(slug, body.playerId, body.displayName));
+    return c.json(await createRoom(slug, player.playerId, player.displayName));
   } catch (err) {
     return c.json({ error: (err as Error).message }, 409);
   }
@@ -78,16 +127,17 @@ app.post("/rooms/:slug/join", async (c) => {
     return c.json({ error: `game "${slug}" does not use 'created' policy` }, 400);
   }
 
-  const body = await c.req.json<{ joinCode?: string; roomId?: string; playerId?: string }>();
-  if (!body.playerId) return c.json({ error: "playerId is required" }, 400);
+  const player = authenticatedPlayer(c.req.header("Authorization"));
+  if (!player) return c.json({ error: "valid player token required" }, 401);
+  const body = await c.req.json<{ joinCode?: string; roomId?: string }>().catch(() => ({}) as Record<string, never>);
 
   try {
     if (config.joinCode) {
       if (!body.joinCode) return c.json({ error: "joinCode is required" }, 400);
-      return c.json(await joinRoomByCode(slug, body.joinCode, body.playerId));
+      return c.json(await joinRoomByCode(slug, body.joinCode, player.playerId));
     }
     if (!body.roomId) return c.json({ error: "roomId is required" }, 400);
-    return c.json(await joinRoomById(slug, body.roomId, body.playerId));
+    return c.json(await joinRoomById(slug, body.roomId, player.playerId));
   } catch (err) {
     return c.json({ error: (err as Error).message }, 409);
   }

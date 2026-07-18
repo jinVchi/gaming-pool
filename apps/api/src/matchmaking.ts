@@ -1,5 +1,16 @@
 import { randomUUID, randomBytes } from "node:crypto";
-import { createRedisClient, roomKey, roomsKey, roomCodeKey, roomListKey, playerRoomKey, claimPlayerRoom, releasePlayerRoom, gameConfigs } from "@gaming-pool/shared";
+import {
+  claimPendingRoomSeat,
+  claimPlayerRoom,
+  createRedisClient,
+  gameConfigs,
+  playerRoomKey,
+  releasePlayerRoom,
+  roomCodeKey,
+  roomKey,
+  roomListKey,
+  roomsKey,
+} from "@gaming-pool/shared";
 import type { GameSlug, RoomAssignment } from "@gaming-pool/shared";
 
 const redis = createRedisClient();
@@ -28,10 +39,15 @@ async function activeRoomFor(playerId: string): Promise<string | null> {
   return null;
 }
 // Assign an auto room to the player.
-export async function assignAutoRoom(slug: GameSlug): Promise<RoomAssignment> {
+export async function assignAutoRoom(slug: GameSlug, playerId: string): Promise<RoomAssignment> {
   const config = gameConfigs[slug];
   if (!config || config.policy !== "auto") {
     throw new Error(`no 'auto' policy config for game "${slug}"`);
+  }
+
+  const activeRoom = await activeRoomFor(playerId);
+  if (activeRoom) {
+    throw new Error("you already have an active room or game — finish or leave it first");
   }
 
   const candidates = await redis.zrevrange(roomsKey(slug), 0, -1, "WITHSCORES");
@@ -45,7 +61,18 @@ export async function assignAutoRoom(slug: GameSlug): Promise<RoomAssignment> {
       await redis.zrem(roomsKey(slug), roomId);
       continue;
     }
-    return { server: GAME_SERVER_ADDR, roomId };
+    const claim = await claimPendingRoomSeat(redis, playerId, roomId, PENDING_ROOM_TTL_S);
+    if (claim === "full") continue;
+    if (claim === "room-not-found") {
+      await redis.zrem(roomsKey(slug), roomId);
+      continue;
+    }
+    if (claim === "player-busy" || claim === "already-active") {
+      throw new Error("you already have an active room or game — finish or leave it first");
+    }
+    const server = await redis.hget(roomKey(roomId), "server");
+    if (!server) throw new Error(`room "${roomId}" has no game server`);
+    return { server, roomId };
   }
 
   const roomId = randomUUID();
@@ -53,10 +80,17 @@ export async function assignAutoRoom(slug: GameSlug): Promise<RoomAssignment> {
     server: GAME_SERVER_ADDR,
     game: slug,
     maxPlayers: config.maxPlayers,
+    playerCount: 0,
   });
   // Pending TTL like created rooms; the game server persists on spin-up.
   await redis.expire(roomKey(roomId), PENDING_ROOM_TTL_S);
   await redis.zadd(roomsKey(slug), 0, roomId);
+  const claim = await claimPendingRoomSeat(redis, playerId, roomId, PENDING_ROOM_TTL_S);
+  if (claim !== "claimed") {
+    await redis.del(roomKey(roomId));
+    await redis.zrem(roomsKey(slug), roomId);
+    throw new Error("failed to reserve a room seat");
+  }
   return { server: GAME_SERVER_ADDR, roomId };
 }
 
@@ -77,7 +111,7 @@ export async function createRoom(
 
   const roomId = randomUUID();
   // Atomic one-room-per-player claim.
-  const reserved = await redis.set(playerRoomKey(playerId), roomId, "EX", PENDING_ROOM_TTL_S, "NX");
+  const reserved = await claimPlayerRoom(redis, playerId, roomId, PENDING_ROOM_TTL_S);
   if (!reserved) {
     throw new Error("you already have an active room or game — finish or leave it first");
   }
@@ -88,6 +122,7 @@ export async function createRoom(
     maxPlayers: config.maxPlayers,
     hostId: playerId,
     hostName: displayName,
+    playerCount: 0,
   };
 
   // For private rooms, generate a join code.
@@ -110,25 +145,14 @@ export async function createRoom(
   return { server: GAME_SERVER_ADDR, roomId, ...(joinCode ? { joinCode } : {}) };
 }
 
-// Atomic pending claim of playerroom for a join — closes the check-then-act
-// race where two concurrent join requests from one player both pass
-// assertNotInGame (the pointer used to be written only when the socket joined).
-async function reservePlayerRoom(playerId: string, roomId: string): Promise<void> {
-  const reserved = await claimPlayerRoom(redis, playerId, roomId, PENDING_ROOM_TTL_S);
-  if (!reserved) {
-    throw new Error("you already have an active room or game — finish or leave it first");
-  }
-}
-
-// Reject join if player already has an active room.
-async function assertNotInGame(playerId: string, targetRoomId: string): Promise<void> {
-  const active = await activeRoomFor(playerId);
-  if (!active) return;
-  throw new Error(
-    active === targetRoomId
-      ? "you are already in this room"
-      : "you already have an active room or game — finish or leave it first",
-  );
+// Reserve the one-room pointer and capacity seat in one Redis script.
+async function reservePlayerSeat(playerId: string, roomId: string): Promise<void> {
+  const result = await claimPendingRoomSeat(redis, playerId, roomId, PENDING_ROOM_TTL_S);
+  if (result === "claimed") return;
+  if (result === "room-not-found") throw new Error(`room "${roomId}" not found`);
+  if (result === "full") throw new Error(`room "${roomId}" is full`);
+  if (result === "already-active") throw new Error("you are already in this room");
+  throw new Error("you already have an active room or game — finish or leave it first");
 }
 
 export async function joinRoomByCode(slug: GameSlug, joinCode: string, playerId: string): Promise<RoomAssignment> {
@@ -140,8 +164,7 @@ export async function joinRoomByCode(slug: GameSlug, joinCode: string, playerId:
   if (room.game !== slug) {
     throw new Error(`join code "${joinCode}" does not belong to game "${slug}"`);
   }
-  await assertNotInGame(playerId, roomId);
-  await reservePlayerRoom(playerId, roomId);
+  await reservePlayerSeat(playerId, roomId);
   return { server: room.server!, roomId };
 }
 
@@ -153,13 +176,7 @@ export async function joinRoomById(slug: GameSlug, roomId: string, playerId: str
   if (room.game !== slug) {
     throw new Error(`room "${roomId}" does not belong to game "${slug}"`);
   }
-  const playerCount = Number(room.playerCount ?? 0);
-  const maxPlayers = Number(room.maxPlayers ?? 0);
-  if (maxPlayers > 0 && playerCount >= maxPlayers) {
-    throw new Error(`room "${roomId}" is full`);
-  }
-  await assertNotInGame(playerId, roomId);
-  await reservePlayerRoom(playerId, roomId);
+  await reservePlayerSeat(playerId, roomId);
   return { server: room.server!, roomId };
 }
 

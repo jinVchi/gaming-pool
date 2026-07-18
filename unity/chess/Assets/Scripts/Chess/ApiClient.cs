@@ -16,20 +16,40 @@ namespace GamingPool.Chess
     {
         [SerializeField] private string apiBaseUrl = "http://localhost:4000";
         [SerializeField] private string gameSlug = "chess";
+        private string _playerToken;
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+        [System.Runtime.InteropServices.DllImport("__Internal")] private static extern string GPGetApiBaseUrl();
+#endif
+
+        public string ApiBaseUrl => apiBaseUrl;
+
+        private void Awake()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            var configuredUrl = GPGetApiBaseUrl();
+            if (!string.IsNullOrEmpty(configuredUrl)) apiBaseUrl = configuredUrl.TrimEnd('/');
+#endif
+        }
+
+        public void ConfigurePlayerToken(string playerToken)
+        {
+            _playerToken = playerToken;
+        }
 
         public void ListRooms(Action<List<OpenRoom>> onSuccess, Action<string> onError)
         {
             StartCoroutine(ListRoomsRoutine(onSuccess, onError));
         }
 
-        public void CreateRoom(string playerId, string displayName, Action<RoomAssignment> onSuccess, Action<string> onError)
+        public void CreateRoom(Action<RoomAssignment> onSuccess, Action<string> onError)
         {
-            StartCoroutine(CreateRoomRoutine(playerId, displayName, onSuccess, onError));
+            StartCoroutine(CreateRoomRoutine(onSuccess, onError));
         }
 
-        public void JoinRoom(string roomId, string playerId, Action<RoomAssignment> onSuccess, Action<string> onError)
+        public void JoinRoom(string roomId, Action<RoomAssignment> onSuccess, Action<string> onError)
         {
-            StartCoroutine(JoinRoomRoutine(roomId, playerId, onSuccess, onError));
+            StartCoroutine(JoinRoomRoutine(roomId, onSuccess, onError));
         }
 
         private IEnumerator ListRoomsRoutine(Action<List<OpenRoom>> onSuccess, Action<string> onError)
@@ -47,13 +67,14 @@ namespace GamingPool.Chess
             onSuccess?.Invoke(rooms);
         }
 
-        private IEnumerator CreateRoomRoutine(string playerId, string displayName, Action<RoomAssignment> onSuccess, Action<string> onError)
+        private IEnumerator CreateRoomRoutine(Action<RoomAssignment> onSuccess, Action<string> onError)
         {
-            var body = new JObject { ["playerId"] = playerId, ["displayName"] = displayName }.ToString(Formatting.None);
+            const string body = "{}";
             using var request = new UnityWebRequest($"{apiBaseUrl}/rooms/{gameSlug}", "POST");
             request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
+            request.SetRequestHeader("Authorization", $"Bearer {_playerToken}");
             yield return request.SendWebRequest();
 
             if (request.result != UnityWebRequest.Result.Success)
@@ -65,13 +86,14 @@ namespace GamingPool.Chess
             onSuccess?.Invoke(JsonConvert.DeserializeObject<RoomAssignment>(request.downloadHandler.text));
         }
 
-        private IEnumerator JoinRoomRoutine(string roomId, string playerId, Action<RoomAssignment> onSuccess, Action<string> onError)
+        private IEnumerator JoinRoomRoutine(string roomId, Action<RoomAssignment> onSuccess, Action<string> onError)
         {
-            var body = new JObject { ["roomId"] = roomId, ["playerId"] = playerId }.ToString(Formatting.None);
+            var body = new JObject { ["roomId"] = roomId }.ToString(Formatting.None);
             using var request = new UnityWebRequest($"{apiBaseUrl}/rooms/{gameSlug}/join", "POST");
             request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
+            request.SetRequestHeader("Authorization", $"Bearer {_playerToken}");
             yield return request.SendWebRequest();
 
             if (request.result != UnityWebRequest.Result.Success)

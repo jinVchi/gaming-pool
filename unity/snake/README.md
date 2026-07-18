@@ -56,10 +56,10 @@ verify it opens correctly). After opening this project in Unity:
 ## Testing in the Editor
 
 With `apps/api` and `apps/game-server` running locally (`npm run dev` from
-the repo root), just hit **Play** in the Editor. `GameManager` POSTs
-`http://localhost:4000/matchmake/snake`, gets back `{ server, roomId }`, and
-connects straight to the game-server over WebSocket — no build required to
-iterate. `NetworkClient` uses `System.Net.WebSockets.ClientWebSocket` in the
+the repo root), just hit **Play** in the Editor. `GameManager` first requests
+a signed guest token, then POSTs `http://localhost:4000/matchmake/snake`, gets
+back `{ server, roomId }`, and connects straight to the game-server over
+WebSocket — no build required to iterate. `NetworkClient` uses `System.Net.WebSockets.ClientWebSocket` in the
 Editor and only switches to the browser-bridged jslib path in an actual
 WebGL build (see `Assets/Scripts/Snake/NetworkClient.cs`).
 
@@ -87,6 +87,9 @@ mode) to join again.
 3. With `npm run dev` running from the repo root (starts the CDN dev server
    on `:8787` alongside everything else), visit
    `http://localhost:3000/games/snake` and click **Play**.
+
+In WebGL, the web shell supplies `NEXT_PUBLIC_API_URL` through the jslib
+bridge; the serialized localhost URL is only the Editor fallback.
 
 `unity/*/Build/` is gitignored — builds aren't committed, matching
 production where they ship to R2 instead.

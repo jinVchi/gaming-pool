@@ -5,8 +5,10 @@ import {
   roomsKey,
   roomCodeKey,
   roomListKey,
+  roomReservationsKey,
   playerRoomKey,
-  claimPlayerRoom,
+  claimReservedPlayerSeat,
+  rollbackClaimedPlayerSeat,
   releasePlayerRoom,
   gameConfigs,
 } from "@gaming-pool/shared";
@@ -31,6 +33,7 @@ interface RoomInstance {
   maxPlayers: number;
   isAuto: boolean;
   joinCode: string | null;
+  hostId: string | null;
   players: Map<string, WebSocket>;
   tickHandle: ReturnType<typeof setInterval>;
   emptySince: number | null;
@@ -61,6 +64,7 @@ export async function sweepOrphanedRooms(serverAddr: string): Promise<void> {
         pipeline.srem(roomListKey(meta.game), roomId);
       }
       if (meta.joinCode) pipeline.del(roomCodeKey(meta.joinCode));
+      pipeline.del(roomReservationsKey(roomId));
       await pipeline.exec();
       removed++;
     }
@@ -114,6 +118,7 @@ async function createRoom(roomId: string): Promise<RoomInstance | null> {
     maxPlayers: Number(meta.maxPlayers) || 0,
     isAuto: config?.policy === "auto",
     joinCode: meta.joinCode ?? null,
+    hostId: meta.hostId ?? null,
     players,
     emptySince: Date.now(),
     tickHandle: setInterval(() => {
@@ -147,14 +152,14 @@ export async function playerActiveRoom(playerId: string): Promise<string | null>
 // Persistent one-room-per-player claim, awaited by the connection handler
 // before seating — atomic, so two sockets racing to different rooms can't
 // both win. False = player already holds a different room.
-export function claimPlayerSeat(playerId: string, roomId: string): Promise<boolean> {
-  return claimPlayerRoom(redis, playerId, roomId);
+export function claimPlayerSeat(playerId: string, roomId: string, allowUnreserved: boolean): Promise<boolean> {
+  return claimReservedPlayerSeat(redis, playerId, roomId, allowUnreserved);
 }
 
 // Undo a claim when the connection is rejected after claiming (room full,
 // socket died) — compare-and-delete, never touches a pointer to another room.
 export function releasePlayerSeat(playerId: string, roomId: string): Promise<void> {
-  return releasePlayerRoom(redis, playerId, roomId);
+  return rollbackClaimedPlayerSeat(redis, playerId, roomId);
 }
 
 export function addPlayer(room: RoomInstance, player: Player, socket: WebSocket): void {
@@ -171,7 +176,10 @@ export function addPlayer(room: RoomInstance, player: Player, socket: WebSocket)
 
   // Update Redis room registry / public list.
   if (room.isAuto) {
-    void redis.zincrby(roomsKey(room.slug), 1, room.roomId);
+    const pipeline = redis.pipeline();
+    pipeline.zadd(roomsKey(room.slug), room.players.size, room.roomId);
+    pipeline.hset(roomKey(room.roomId), { playerCount: room.players.size });
+    void pipeline.exec();
   } else {
     const update: Record<string, string | number> = { playerCount: room.players.size };
     if (room.players.size === 1) update.hostName = player.displayName;
@@ -221,7 +229,10 @@ export function removePlayer(room: RoomInstance, playerId: string): void {
 
   // Update Redis counts / relist if a seat opened.
   if (room.isAuto) {
-    void redis.zincrby(roomsKey(room.slug), -1, room.roomId);
+    const pipeline = redis.pipeline();
+    pipeline.zadd(roomsKey(room.slug), room.players.size, room.roomId);
+    pipeline.hset(roomKey(room.roomId), { playerCount: room.players.size });
+    void pipeline.exec();
   } else if (room.players.size > 0) {
     void redis.hset(roomKey(room.roomId), { playerCount: room.players.size });
     if (!room.joinCode && room.players.size < room.maxPlayers) {
@@ -249,6 +260,7 @@ async function destroyRoom(room: RoomInstance, reason: string): Promise<void> {
   pipeline.del(roomKey(room.roomId));
   if (room.isAuto) pipeline.zrem(roomsKey(room.slug), room.roomId);
   if (room.joinCode) pipeline.del(roomCodeKey(room.joinCode));
+  pipeline.del(roomReservationsKey(room.roomId));
   pipeline.srem(roomListKey(room.slug), room.roomId);
   await pipeline.exec();
 

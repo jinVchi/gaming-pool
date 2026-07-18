@@ -30,9 +30,12 @@ export function AuthHeader() {
     e.preventDefault();
     setLoading(true);
     setError(null);
-    // The username plugin's sign-in endpoint accepts either a username or an
-    // email in this field — matches AGENTS.md's "login with email or username".
-    const { error: signInError } = await authClient.signIn.username({ username: identifier, password });
+    // Better Auth exposes separate email and username endpoints, so dispatch
+    // based on the identifier instead of sending email to the username validator.
+    const result = identifier.includes("@")
+      ? await authClient.signIn.email({ email: identifier, password })
+      : await authClient.signIn.username({ username: identifier, password });
+    const signInError = result.error;
     setLoading(false);
     if (signInError) {
       setError(signInError.message ?? "Sign in failed");

@@ -92,9 +92,10 @@ Source of truth: [`packages/games/src/chess/module.ts`](../../packages/games/src
 and [`apps/api/src/matchmaking.ts`](../../apps/api/src/matchmaking.ts). Summary:
 
 **HTTP (Global API)**
-- `POST /rooms/chess` → `{ server, roomId }` — create a room (becomes host/owner).
+- `POST /player-token` → signed player token (web session or private guest credential).
+- `POST /rooms/chess` with `Authorization: Bearer <token>` → `{ server, roomId }` — create a room (becomes host/owner).
 - `GET /rooms/chess` → `[{ roomId, hostName, playerCount, maxPlayers }]` — open rooms.
-- `POST /rooms/chess/join` `{ roomId }` → `{ server, roomId }` — join an open room.
+- `POST /rooms/chess/join` with the bearer token and `{ roomId }` → `{ server, roomId }` — reserve and join an open room.
 
 **Server → client (WebSocket)**
 - `{ type: "lobby", payload: { ownerId, started, players: [{id, displayName, ready}] } }`

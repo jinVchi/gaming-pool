@@ -1,30 +1,28 @@
-// Resolves who is playing so Unity never invents its own identity. Signed-in
-// users get their Better Auth user id + nickname (see PlayShell); visitors get
-// a guest identity persisted in localStorage so every tab of the same browser
-// is the same player — required for one-room/one-game-per-player enforcement.
+// Persist a private guest credential across tabs. The API derives the public
+// player id and signs it, so a lobby-visible guest id cannot be impersonated.
 
-export interface PlayerIdentity {
-  playerId: string;
+export interface GuestIdentity {
+  guestCredential: string;
   displayName: string;
 }
 
 const GUEST_STORAGE_KEY = "gp:guest-identity";
 
-function generateGuestIdentity(): PlayerIdentity {
+function generateGuestIdentity(): GuestIdentity {
   const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
   return {
-    playerId: `guest_${crypto.randomUUID().replace(/-/g, "")}`,
+    guestCredential: crypto.randomUUID().replace(/-/g, ""),
     displayName: `Guest-${suffix}`,
   };
 }
 
-export function getGuestIdentity(): PlayerIdentity {
+export function getGuestIdentity(): GuestIdentity {
   try {
     const stored = localStorage.getItem(GUEST_STORAGE_KEY);
     if (stored) {
-      const parsed = JSON.parse(stored) as Partial<PlayerIdentity>;
-      if (typeof parsed.playerId === "string" && typeof parsed.displayName === "string") {
-        return { playerId: parsed.playerId, displayName: parsed.displayName };
+      const parsed = JSON.parse(stored) as Partial<GuestIdentity>;
+      if (typeof parsed.guestCredential === "string" && typeof parsed.displayName === "string") {
+        return { guestCredential: parsed.guestCredential, displayName: parsed.displayName };
       }
     }
   } catch {
