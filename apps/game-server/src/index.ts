@@ -20,7 +20,7 @@ const MAX_MESSAGE_BYTES = 16 * 1024;
 const BURST_RATE_WINDOW_MS = 10_000;
 const MAX_BURST_MESSAGES = 120;
 const SUSTAINED_RATE_WINDOW_MS = 60_000;
-const MAX_SUSTAINED_MESSAGES = 600;
+const MAX_SUSTAINED_MESSAGES = 1_200;
 const SOCKET_PROTOCOL = "gaming-pool";
 const gameAuthSecret = getGameAuthSecret();
 // Advertised address, must match what matchmaking hands out for this server.
@@ -66,6 +66,8 @@ function messageRateVerdict(socket: WebSocket): "accept" | "drop" | "close" {
     rate.sustainedCount = 0;
   }
   rate.burstCount += 1;
+  // Count all attempts so sustained flooding eventually closes the socket;
+  // this limit is intentionally looser than the short-window drop limit.
   rate.sustainedCount += 1;
   if (rate.sustainedCount > MAX_SUSTAINED_MESSAGES) return "close";
   if (rate.burstCount > MAX_BURST_MESSAGES) return "drop";

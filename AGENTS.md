@@ -79,7 +79,7 @@ unity/            # Unity projects (one per game); WebGL builds output here (git
 
 - Postgres and Redis reuse pre-existing Docker containers on the dev machine (no docker-compose in this repo): `postgres-db` (postgres:17, root/000000, db `gaming_pool` — the `ecommerce` db in the same container belongs to another project) and `redis-server` (redis:8, **logical DB 1**: `redis://localhost:6379/1`).
 - Ports: web 3000, api 4000, game-server 5000, CDN dev server 8787.
-- Each app has a gitignored `.env` (see committed `.env.example` for expected vars). CORS/auth origins come from `WEB_ORIGIN` on the api. `GAME_AUTH_SECRET` must match between the API and every game server and is mandatory in production. The game server also needs `DATABASE_URL` to persist signed-in scores; without it, gameplay continues but score writes are skipped with a warning.
+- Each app has a gitignored `.env` (see committed `.env.example` for expected vars). CORS/auth origins come from `WEB_ORIGIN` on the api. Leave API `TRUST_PROXY=false` unless a front proxy replaces client-supplied `X-Forwarded-For`; Fly uses its own runtime-gated client-IP header. `GAME_AUTH_SECRET` must match between the API and every game server and is mandatory in production. The game server also needs `DATABASE_URL` to persist signed-in scores; without it, gameplay continues but score writes are skipped with a warning.
 - Unity WebGL builds go to `unity/{slug}/Build`; Unity names the output after the folder, so files land at `unity/{slug}/Build/Build/Build.*` — the web loader (`apps/web/components/UnityLoader.tsx`) expects exactly that layout. Keep the same layout when uploading to R2.
 
 ## Commands

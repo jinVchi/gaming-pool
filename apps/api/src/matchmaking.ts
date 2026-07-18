@@ -102,7 +102,10 @@ export async function assignAutoRoom(slug: GameSlug, playerId: string): Promise<
       continue;
     }
     const server = await redis.hget(roomKey(roomId), "server");
-    if (!server) throw new Error(`room "${roomId}" has no game server`);
+    if (!server) {
+      await redis.zrem(roomsKey(slug), roomId);
+      continue;
+    }
     const claim = await claimPendingRoomSeat(redis, playerId, roomId, PENDING_ROOM_TTL_S);
     if (claim === "full") continue;
     if (claim === "room-not-found") {

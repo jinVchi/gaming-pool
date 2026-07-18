@@ -25,6 +25,7 @@ const app = new Hono();
 const gameAuthSecret = getGameAuthSecret();
 const GUEST_TOKEN_LIMIT = 30;
 const GUEST_TOKEN_WINDOW_MS = 60_000;
+const trustProxy = process.env.TRUST_PROXY === "true";
 const guestTokenWindows = new Map<string, { startedAt: number; count: number }>();
 const guestTokenCleanup = setInterval(() => {
   const cutoff = Date.now() - GUEST_TOKEN_WINDOW_MS * 2;
@@ -56,12 +57,12 @@ app.get("/health", (c) => c.json({ ok: true }));
 app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
 function clientAddress(c: Context): string {
-  return (
-    c.req.header("fly-client-ip") ??
-    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
-    getConnInfo(c).remote.address ??
-    "unknown"
-  );
+  const directAddress = getConnInfo(c).remote.address ?? "unknown";
+  // Fly sets this header itself; only trust it when the Fly runtime is present.
+  if (process.env.FLY_APP_NAME) return c.req.header("fly-client-ip") ?? directAddress;
+  if (!trustProxy) return directAddress;
+  // TRUST_PROXY requires the front proxy to replace, not append to, client XFF.
+  return c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || directAddress;
 }
 
 function consumeGuestTokenLimit(address: string): number | null {
