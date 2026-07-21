@@ -31,8 +31,23 @@ unity/            # Unity projects (one per game); WebGL builds output here (git
 1. **Client connects directly to game servers via WebSocket.** The Global API only assigns `{server, roomId}`; game traffic never proxies through it or through Vercel.
 2. **Unity builds never touch Vercel.** They live in R2 with `Content-Encoding: br` headers. Game pages reference CDN URLs in `createUnityInstance` config.
 3. **Postgres is off the hot path.** Game ticks and room state stay in memory/Redis. The game server queues signed-in score writes and flushes bounded batches asynchronously; guests are not written because `scores.user_id` references Better Auth users. Ratings follow the same async/batched rule.
-4. **Redis = ephemeral room registry only.** Keys: `rooms:{game}` (sorted set by connected player count, auto-policy games), `room:{roomId}` (hash: server, game, maxPlayers, playerCount, and for created-policy rooms joinCode or hostId/hostName), `roomreservations:{roomId}` (sorted set of short-lived API seat reservations), `roomcode:{joinCode}` (code → roomId), `roomlist:{game}` (set of publicly-joinable created-policy rooms with an open seat), `playerroom:{playerId}` (player → their active roomId; reserved with a pending TTL on room create, auto assignment, and created-room join, atomically claimed persistent when the WebSocket joins, released on leave — enforces **one active room/game per player** in the API and game server). Always use the Lua helpers in `packages/shared/src/redis.ts`; never plain SET/DEL or check-then-write capacity logic. Game servers update connected counts; matchmaking atomically counts connected players plus pending seats. Key builders live in `packages/shared/src/redis.ts` — never hand-format keys. `room:`/`roomcode:` keys start with a pending TTL and are persisted by the game server once the room spins up.
-5. **The web shell owns player identity; Unity never invents it.** `PlayShell` exchanges either the Better Auth session or a browser-held random guest credential for a short-lived, HMAC-signed `{ playerId, displayName, isGuest }` game token. `UnityLoader` exposes the identity, token, and runtime API URL on `window`, which Unity reads via jslib bridges. Matchmaking and the direct WebSocket connection both require the token and derive identity only from its verified payload; never trust caller-supplied player ids. `PlayShell` also holds a Web Locks API lock (`gaming-pool:unity-game`) while a game runs, so one browser can only run one Unity game at a time; the server-side `playerroom:` check covers cross-device/cross-browser duplicates.
+4. **Redis = ephemeral room registry only.** Tracks live rooms/seats, not game state or scores.
+   - `rooms:{game}` — sorted set of auto-policy rooms, scored by connected player count (for “fullest room” matchmaking).
+   - `room:{roomId}` — hash of room metadata: `server`, `game`, `maxPlayers`, `playerCount`; created-policy rooms also store `joinCode` or `hostId`/`hostName`.
+   - `roomreservations:{roomId}` — sorted set of short-lived API seat holds (player reserved a seat but WebSocket not joined yet).
+   - `roomcode:{joinCode}` — maps join code → `roomId` (private created rooms).
+   - `roomlist:{game}` — set of publicly joinable created-policy rooms that still have an open seat.
+   - `playerroom:{playerId}` — player → active `roomId`: short TTL when API creates/assigns/joins; becomes persistent when WebSocket joins; cleared on leave. Enforces **one active room/game per player**.
+   - Always use the Lua helpers in `packages/shared/src/redis.ts`; never plain SET/DEL or check-then-write capacity logic.
+   - Game servers update connected counts; matchmaking atomically counts connected players plus pending seats.
+   - Key builders live in `packages/shared/src/redis.ts` — never hand-format keys.
+   - `room:` / `roomcode:` keys start with a pending TTL and are persisted by the game server once the room spins up.
+5. **The web shell owns player identity; Unity never invents it.**
+   - `PlayShell` exchanges either the Better Auth session or a browser-held random guest credential for a short-lived, HMAC-signed `{ playerId, displayName, isGuest }` game token.
+   - `UnityLoader` exposes the identity, token, and runtime API URL on `window`, which Unity reads via jslib bridges.
+   - Matchmaking and the direct WebSocket connection both require the token and derive identity only from its verified payload; never trust caller-supplied player ids.
+   - `PlayShell` holds a Web Locks API lock (`gaming-pool:unity-game`) while a game runs, so one browser can only run one Unity game at a time.
+   - The server-side `playerroom:` check covers cross-device/cross-browser duplicates.
 
 ## Multi-game conventions
 
