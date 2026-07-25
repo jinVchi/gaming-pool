@@ -5,17 +5,16 @@ import dynamic from "next/dynamic";
 import { useSession } from "@/lib/auth-client";
 import { getGuestIdentity } from "@/lib/player-identity";
 
+// Load Unity only in the browser after Play (WebGL needs window/DOM).
 const UnityLoader = dynamic(() => import("./UnityLoader").then((m) => m.UnityLoader), {
   ssr: false,
 });
 
-// Browser-wide exclusive lock held while any Unity game runs in this browser
-// profile — a second tab can't even start the Unity instance. Released
-// automatically when the tab closes or does a full page load away (leaving a
-// game page is always a full load, see AGENTS.md game-server rules).
+// Cross-tab lock so only one Unity instance runs per browser profile.
 const UNITY_LOCK_NAME = "gaming-pool:unity-game";
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
+// Signed identity returned by POST /player-token for matchmaking + WebSocket.
 interface PlayerCredential {
   playerId: string;
   displayName: string;
@@ -23,7 +22,9 @@ interface PlayerCredential {
 }
 
 export function PlayShell({ slug }: { slug: string }) {
+  // Better Auth session decides signed-in vs guest token exchange.
   const { data: session, isPending } = useSession();
+  // Play flow: idle → fetching credential → Unity mounted.
   const [started, setStarted] = useState(false);
   const [lockedByOtherTab, setLockedByOtherTab] = useState(false);
   const [credential, setCredential] = useState<PlayerCredential | null>(null);
@@ -31,7 +32,7 @@ export function PlayShell({ slug }: { slug: string }) {
   const [credentialAttempt, setCredentialAttempt] = useState(0);
 
   useEffect(() => {
-    // Warn up front if a game is already running in another tab.
+    // Probe whether another tab already holds the Unity lock.
     if (!("locks" in navigator)) return;
     void navigator.locks.query().then((state) => {
       if (state.held?.some((lock) => lock.name === UNITY_LOCK_NAME)) {
@@ -41,6 +42,7 @@ export function PlayShell({ slug }: { slug: string }) {
   }, []);
 
   useEffect(() => {
+    // Exchange session cookie or guest credential for a short-lived game token.
     if (!started || isPending || credential) return;
     let cancelled = false;
     const guest = session?.user ? null : getGuestIdentity();
@@ -54,6 +56,7 @@ export function PlayShell({ slug }: { slug: string }) {
       ),
     })
       .then(async (response) => {
+        // Accept only a complete credential payload from the API.
         const body = (await response.json().catch(() => ({}))) as Partial<PlayerCredential> & { error?: string };
         if (!response.ok || !body.playerId || !body.displayName || !body.token) {
           throw new Error(body.error ?? `player credential request failed (${response.status})`);
@@ -61,21 +64,25 @@ export function PlayShell({ slug }: { slug: string }) {
         if (!cancelled) setCredential({ playerId: body.playerId, displayName: body.displayName, token: body.token });
       })
       .catch((err: unknown) => {
+        // Surface fetch/parse failures for the Retry UI.
         if (!cancelled) setCredentialError((err as Error).message);
       });
 
     return () => {
+      // Ignore late responses after unmount or dependency change.
       cancelled = true;
     };
   }, [credential, credentialAttempt, isPending, session?.user, started]);
 
   function handlePlay() {
+    // Claim the Unity lock (or start immediately if Web Locks unsupported).
     if (!("locks" in navigator)) {
       setStarted(true);
       return;
     }
     void navigator.locks.request(UNITY_LOCK_NAME, { ifAvailable: true }, (lock) => {
       if (!lock) {
+        // Another tab holds the lock — do not start.
         setLockedByOtherTab(true);
         return;
       }
@@ -87,6 +94,7 @@ export function PlayShell({ slug }: { slug: string }) {
   }
 
   if (!started) {
+    // Idle: show Play until the user starts (and warn if another tab is busy).
     return (
       <div className="play-shell">
         <button type="button" className="play-button" onClick={handlePlay} disabled={isPending}>
@@ -102,6 +110,7 @@ export function PlayShell({ slug }: { slug: string }) {
   }
 
   if (!credential) {
+    // Waiting for / retrying the player-token exchange.
     return (
       <div className="play-shell">
         <p className="game-status" role={credentialError ? "alert" : undefined}>
@@ -112,6 +121,7 @@ export function PlayShell({ slug }: { slug: string }) {
             type="button"
             className="play-button"
             onClick={() => {
+              // Clear error and bump attempt so the fetch effect re-runs.
               setCredentialError(null);
               setCredentialAttempt((attempt) => attempt + 1);
             }}
@@ -123,6 +133,7 @@ export function PlayShell({ slug }: { slug: string }) {
     );
   }
 
+  // Credential ready — mount Unity with signed identity.
   return (
     <div className="play-shell">
       <UnityLoader
